@@ -38,12 +38,6 @@ describe GoodData::Helpers do
     end
   end
 
-  describe '#find_goodfile' do
-    it 'works' do
-      GoodData::Helpers.find_goodfile.should_not be_nil
-    end
-  end
-
   describe "#decode_params" do
     it 'decodes the data params from json' do
       params = {
@@ -223,7 +217,14 @@ describe GoodData::Helpers do
         'number_param' => 5,
         'ads_password' => 'ads_123',
         'my_password' => 'login_123',
-        'gd_encoded_params' => { "login_username" => "login_user", "login_password" => "${my_password}", "ads_client" => { "username" => "ads_user", "password" => "${ads_password}" } }
+        'gd_encoded_params' => {
+          "login_username" => "login_user",
+          "login_password" => "${my_password}",
+          "ads_client" => {
+            "username" => "ads_user",
+            "password" => "${ads_password}"
+          }
+        }
       }
       expected_result = {
         'param' => 'value',

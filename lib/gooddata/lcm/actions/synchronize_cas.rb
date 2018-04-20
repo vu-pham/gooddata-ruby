@@ -17,29 +17,50 @@ module GoodData
 
         description 'Synchronization Info'
         param :synchronize, array_of(instance_of(Type::SynchronizationInfoType)), required: true, generated: true
+
+        description 'Specifies whether to transfer computed attributes'
+        param :include_computed_attributes, instance_of(Type::BooleanType), required: false, default: true
+
+        description 'Logger'
+        param :gdc_logger, instance_of(Type::GdLogger), required: true
+
+        description 'Additional Hidden Parameters'
+        param :additional_hidden_params, instance_of(Type::HashType), required: false
       end
 
       class << self
         def call(params)
-          BaseAction.check_params(PARAMS, params)
+          # set default value for include_computed_attributes
+          # (we won't have to do this after TMA-690)
+          include_ca = params.include_computed_attributes
+          include_ca = true if include_ca.nil?
+          include_ca = include_ca.to_b
+
           results = []
-          development_client = params.development_client
+          return results unless include_ca
+
           client = params.gdc_gd_client
 
-          params.synchronize.peach do |info|
+          params.synchronize.each do |info|
             from = info.from
             to_projects = info.to
 
-            from_project = development_client.projects(from) || fail("Invalid 'from' project specified - '#{from}'")
-            params.gdc_logger.info "Synchronize Computed Attributes, project: '#{from_project.title}', PID: #{from_project.pid}"
+            params.gdc_logger.info "Synchronize Computed Attributes from project pid: #{from}"
 
-            blueprint = from_project.blueprint
             to_projects.peach do |entry|
-              pid = entry[:pid]
-              to_project = client.projects(pid) || fail("Invalid 'to' project specified - '#{pid}'")
+              ca_scripts = entry[:ca_scripts]
+              next unless ca_scripts
 
-              params.gdc_logger.info "Synchronizing Computed Attributes from project: '#{to_project.title}', PID: #{pid}"
-              to_project.update_from_blueprint(blueprint)
+              pid = entry[:pid]
+              ca_chunks = ca_scripts[:maqlDdlChunks]
+              to_project = client.projects(pid) || fail("Invalid 'to' project specified - '#{pid}'")
+              params.gdc_logger.info "Synchronizing Computed Attributes to project: '#{to_project.title}', PID: #{pid}"
+
+              begin
+                ca_chunks.each { |chunk| to_project.execute_maql(chunk) }
+              rescue => e
+                raise "Error occured when executing MAQL, project: \"#{to_project.title}\" reason: \"#{e.message}\", chunks: #{ca_chunks.inspect}"
+              end
 
               results << {
                 from: from,

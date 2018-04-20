@@ -13,26 +13,33 @@ require_relative 'helpers/helpers'
 module GoodData
   module LCM2
     class SmartHash < Hash
+      @specification = nil
       def method_missing(name, *_args)
-        key = name.to_s.downcase.to_sym
+        data(name)
+      end
 
-        value = nil
-        keys.each do |k|
-          if k.to_s.downcase.to_sym == key
-            value = self[k]
-            break
-          end
-        end
+      def [](variable)
+        data(variable)
+      end
 
-        if value
-          value
-        else
-          begin
-            super
-          rescue
-            nil
-          end
+      def clear_filters
+        @specification = nil
+      end
+
+      def setup_filters(filter)
+        @specification = filter.to_hash
+      end
+
+      def check_specification(variable)
+        if @specification && !@specification[variable.to_sym] && !@specification[variable.to_s] \
+                          && !@specification[variable.to_s.downcase.to_sym] && !@specification[variable.to_s.downcase]
+          fail "Param #{variable} is not defined in the specification"
         end
+      end
+
+      def data(variable)
+        check_specification(variable)
+        fetch(keys.find { |k| k.to_s.downcase.to_sym == variable.to_s.downcase.to_sym }, nil)
       end
 
       def key?(key)
@@ -80,53 +87,73 @@ module GoodData
 
       release: [
         EnsureReleaseTable,
+        EnsureDataProduct,
+        CollectDataProduct,
         SegmentsFilter,
         CreateSegmentMasters,
         EnsureTechnicalUsersDomain,
         EnsureTechnicalUsersProject,
         SynchronizeLdm,
+        CollectLdmObjects,
         CollectMeta,
         CollectTaggedObjects,
         CollectComputedAttributeMetrics,
         ImportObjectCollections,
         SynchronizeComputedAttributes,
-        SynchronizeLabelTypes,
-        SynchronizeAttributeDrillpath,
         SynchronizeProcesses,
         SynchronizeSchedules,
         SynchronizeColorPalette,
+        SynchronizeUserGroups,
         SynchronizeNewSegments,
         UpdateReleaseTable
       ],
 
       provision: [
         EnsureReleaseTable,
+        CollectDataProduct,
         CollectSegments,
+        CollectClientProjects,
         PurgeClients,
         CollectClients,
         AssociateClients,
+        RenameExistingClientProjects,
         ProvisionClients,
         EnsureTechnicalUsersDomain,
         EnsureTechnicalUsersProject,
+        CollectDymanicScheduleParams,
         SynchronizeETLsInSegment
       ],
 
       rollout: [
         EnsureReleaseTable,
+        CollectDataProduct,
         CollectSegments,
         CollectSegmentClients,
         EnsureTechnicalUsersDomain,
         EnsureTechnicalUsersProject,
         SynchronizeLdm,
-        CollectComputedAttributeMetrics,
-        ImportObjectCollections,
-        SynchronizeComputedAttributes, # need to sync CA here to maintain the drill path after that
-        # SynchronizeLabelTypes,
-        SynchronizeAttributeDrillpath,
         ApplyCustomMaql,
-        SynchronizeColorPalette,
         SynchronizeClients,
+        SynchronizeComputedAttributes,
+        CollectDymanicScheduleParams,
         SynchronizeETLsInSegment
+      ],
+
+      users: [
+        CollectDataProduct,
+        CollectSegments,
+        SynchronizeUsers
+      ],
+
+      user_filters: [
+        CollectDataProduct,
+        CollectUsersBrickUsers,
+        CollectSegments,
+        SynchronizeUserFilters
+      ],
+
+      schedules_execution: [
+        ExecuteSchedules
       ]
     }
 
@@ -136,6 +163,12 @@ module GoodData
       def convert_params(params)
         # Symbolize all keys
         GoodData::Helpers.symbolize_keys!(params)
+        params.keys.each do |k|
+          params[k.downcase] = params[k]
+        end
+        params.reject! do |k, _|
+          k.downcase != k
+        end
         convert_to_smart_hash(params)
       end
 
@@ -201,6 +234,10 @@ module GoodData
         headings = keys.map(&:upcase)
 
         rows = messages && messages.map do |message|
+          unless message
+            GoodData.logger.warn("Found an empty message in the results of the #{action.name} action")
+            next
+          end
           row = []
           keys.each do |heading|
             row << message[heading]
@@ -209,10 +246,11 @@ module GoodData
         end
 
         rows ||= []
+        rows.compact!
 
         table = Terminal::Table.new :title => title, :headings => headings do |t|
           rows.each_with_index do |row, index|
-            t << row
+            t << (row || [])
             t.add_separator if index < rows.length - 1
           end
         end
@@ -245,11 +283,6 @@ module GoodData
           end
         end
 
-        check_unused_params(actions, params)
-
-        # Print name of actions to be performed for debug purposes
-        print_action_names(mode, actions)
-
         # TODO: Check all action params first
 
         new_params = params
@@ -266,6 +299,14 @@ module GoodData
                         true
                       end
 
+        skip_actions = (params.skip_actions || [])
+        actions = actions.reject do |action|
+          skip_actions.include?(action.name.split('::').last)
+        end
+
+        check_unused_params(actions, params)
+        print_action_names(mode, actions)
+
         # Run actions
         errors = []
         results = []
@@ -274,10 +315,13 @@ module GoodData
 
           # Invoke action
           begin
+            GoodData.logger.info("Running #{action.name} action ...")
+            params.clear_filters
             # Check if all required parameters were passed
             BaseAction.check_params(action.const_get('PARAMS'), params)
-
+            params.setup_filters(action.const_get('PARAMS'))
             out = action.send(:call, params)
+            params.clear_filters
           rescue => e
             errors << {
               action: action,
@@ -286,6 +330,9 @@ module GoodData
             }
             break if fail_early
           end
+
+          # in case fail_early = false, we need to execute another action
+          next unless out
 
           # Handle output results and params
           res = out.is_a?(Array) ? out : out[:results]
@@ -305,15 +352,6 @@ module GoodData
 
         # Fail whole execution if there is any failed action
         fail(JSON.pretty_generate(errors)) if strict_mode && errors.any?
-
-        if actions.length > 1
-          puts
-          puts 'SUMMARY'
-          puts
-
-          # Print execution summary/results
-          print_actions_result(actions, results)
-        end
 
         brick_results = {}
         actions.each_with_index do |action, index|

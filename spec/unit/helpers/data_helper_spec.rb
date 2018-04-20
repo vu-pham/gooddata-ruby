@@ -7,16 +7,18 @@
 require 'gooddata/helpers/data_helper'
 
 describe GoodData::Helpers::DataSource do
+  let(:file_size) { 666 }
+
   before :each do
     @s3_client = double('s3_client')
-    @buckets = double('buckets')
     @bucket = double('bucket')
     @objects = double('objects')
 
-    allow(@s3_client).to receive(:buckets) { @buckets }
-    allow(@buckets).to receive(:[]) { @bucket }
-    allow(@bucket).to receive(:objects) { @objects }
-    allow(@objects).to receive(:[]) { StringIO.new('aaa') }
+    allow(@s3_client).to receive(:bucket) { @bucket }
+    allow(@bucket).to receive(:object) { @objects }
+    allow(@objects).to receive(:get) { StringIO.new('aaa') }
+    allow(@objects).to receive(:size) { file_size }
+    allow(File).to receive(:size) { file_size }
 
     @ds = GoodData::Helpers::DataSource.new(type: :s3, bucket: 'some_bucket', key: 'some_key')
   end
@@ -48,5 +50,18 @@ describe GoodData::Helpers::DataSource do
     expect do
       ds.realize(params)
     end.to raise_exception 'Key "key" is missing in S3 datasource'
+  end
+
+  context 'when size of the downloaded file is not right' do
+    before do
+      allow(File).to receive(:size) { 0 }
+    end
+
+    it 'raises an error' do
+      params = { 'aws_client' => { 's3_client' => @s3_client } }
+      expect do
+        @ds.realize(params)
+      end.to raise_exception(/Expected size 666, got 0/)
+    end
   end
 end

@@ -1,4 +1,17 @@
-### Contribution acceptance criteria
+# Contributing
+
+## Static analysis
+We use [Pronto](https://github.com/prontolabs/pronto) to detect code smells using static analysis. Comments are automatically created on pull requests when code smells are found.
+
+#### Running locally
+`bundle exec pronto run --unstaged -c upstream/develop`
+
+#### Editor integrations:
+- [Rubocop](https://rubocop.readthedocs.io/en/latest/integration_with_other_tools/)
+- [Reek](https://github.com/troessner/reek#editor-integrations)
+- [Flay](https://github.com/seattlerb/flay)
+
+## Acceptance criteria
 
 1. The change is as small as possible. It fixes one specific issue or implements
    one specific feature. Do not combine things, send separate pull requests if needed.
@@ -20,5 +33,6 @@
    only one working on your feature branch, otherwise, merge `master`).
 1. If the pull request adds any new libraries, they should be in line with our
    [license](/LICENSE).
+1. Use `GoodData.logger` for logging instead of `puts`.
 
 _Based on [GitLab's contribution guide](https://github.com/gitlabhq/gitlabhq/blob/master/CONTRIBUTING.md)._

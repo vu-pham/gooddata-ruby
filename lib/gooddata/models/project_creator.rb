@@ -14,7 +14,7 @@ module GoodData
     class ProjectCreator
       class << self
         def migrate(opts = {})
-          opts = { client: GoodData.connection }.merge(opts)
+          opts = { client: GoodData.connection, execute_ca_scripts: true }.merge(opts)
           client = opts[:client]
           fail ArgumentError, 'No :client specified' if client.nil?
 
@@ -25,15 +25,13 @@ module GoodData
 
           project = opts[:project] || client.create_project(opts.merge(:title => opts[:title] || spec[:title], :client => client, :environment => opts[:environment]))
 
-          begin
-            migrate_datasets(spec, opts.merge(project: project, client: client))
-            load(p, spec)
-            migrate_metrics(p, spec[:metrics] || [])
-            migrate_reports(p, spec[:reports] || [])
-            migrate_dashboards(p, spec[:dashboards] || [])
-            execute_tests(p, spec[:assert_tests] || [])
-            project
-          end
+          maqls = migrate_datasets(spec, opts.merge(project: project, client: client))
+          load(p, spec)
+          migrate_metrics(p, spec[:metrics] || [])
+          migrate_reports(p, spec[:reports] || [])
+          migrate_dashboards(p, spec[:dashboards] || [])
+          execute_tests(p, spec[:assert_tests] || [])
+          opts[:execute_ca_scripts] ? project : maqls.find { |maql| maql.key?('maqlDdlChunks') }
         end
 
         def migrate_datasets(spec, opts = {})
@@ -41,13 +39,12 @@ module GoodData
           dry_run = opts[:dry_run]
           replacements = opts['maql_replacements'] || opts[:maql_replacements] || {}
 
-          client, project = GoodData.get_client_and_project(opts)
+          _, project = GoodData.get_client_and_project(opts)
 
           bp = ProjectBlueprint.new(spec)
-
-          uri = "/gdc/projects/#{project.pid}/model/diff?includeGrain=true"
-          result = client.post(uri, bp.to_wire)
-          response = client.poll_on_code(result['asyncTask']['link']['poll'])
+          maql_diff_params = [:includeGrain]
+          maql_diff_params << :excludeFactRule if opts[:exclude_fact_rule]
+          response = project.maql_diff(blueprint: bp, params: maql_diff_params)
 
           GoodData.logger.debug("projectModelDiff") { response.pretty_inspect }
           chunks = response['projectModelDiff']['updateScripts']
@@ -63,7 +60,10 @@ module GoodData
             errors = []
             replaced_maqls.each do |replaced_maql_chunks|
               begin
-                replaced_maql_chunks['updateScript']['maqlDdlChunks'].each { |chunk| project.execute_maql(chunk) }
+                replaced_maql_chunks['updateScript']['maqlDdlChunks'].each do |chunk|
+                  GoodData.logger.debug(chunk)
+                  project.execute_maql(chunk)
+                end
               rescue => e
                 puts "Error occured when executing MAQL, project: \"#{project.title}\" reason: \"#{e.message}\", chunks: #{replaced_maql_chunks.inspect}"
                 errors << e
@@ -71,7 +71,7 @@ module GoodData
               end
             end
 
-            if ca_chunks
+            if ca_chunks && opts[:execute_ca_scripts]
               begin
                 ca_chunks.each { |chunk| project.execute_maql(chunk) }
               rescue => e
@@ -129,6 +129,19 @@ module GoodData
           preference = GoodData::Helpers.symbolize_keys(opts[:update_preference] || {})
           preference = Hash[preference.map { |k, v| [k, GoodData::Helpers.to_boolean(v)] }]
 
+          # will use new parameters instead of the old ones
+          if preference.empty? || [:allow_cascade_drops, :keep_data].any? { |k| preference.key?(k) }
+            if [:cascade_drops, :preserve_data].any? { |k| preference.key?(k) }
+              fail "Please do not mix old parameters (:cascade_drops, :preserve_data) with the new ones (:allow_cascade_drops, :keep_data)."
+            end
+            preference = { allow_cascade_drops: false, keep_data: true }.merge(preference)
+
+            new_preference = {}
+            new_preference[:cascade_drops] = false unless preference[:allow_cascade_drops]
+            new_preference[:preserve_data] = true if preference[:keep_data]
+            preference = new_preference
+          end
+
           # first is cascadeDrops, second is preserveData
           rules = [
             { priority: 1, cascade_drops: false, preserve_data: true },
@@ -142,10 +155,19 @@ module GoodData
           end
 
           stuff = stuff.map do |chunk|
-            { cascade_drops: chunk['updateScript']['cascadeDrops'], preserve_data: chunk['updateScript']['preserveData'], maql: chunk['updateScript']['maqlDdlChunks'], orig: chunk }
+            { cascade_drops: chunk['updateScript']['cascadeDrops'],
+              preserve_data: chunk['updateScript']['preserveData'],
+              maql: chunk['updateScript']['maqlDdlChunks'],
+              orig: chunk }
           end
 
-          results_from_api = GoodData::Helpers.join(rules, stuff, [:cascade_drops, :preserve_data], [:cascade_drops, :preserve_data], inner: true).sort_by { |l| l[:priority] } || []
+          results_from_api = GoodData::Helpers.join(
+            rules,
+            stuff,
+            [:cascade_drops, :preserve_data],
+            [:cascade_drops, :preserve_data],
+            inner: true
+          ).sort_by { |l| l[:priority] } || []
 
           if preference.empty?
             [results_from_api.first[:orig]]

@@ -15,7 +15,7 @@ module GoodData
       set_const :GD_MAX_RETRY, Helpers::GD_MAX_RETRY
 
       set_const :DEFAULT_USERNAME, "rubydev+admin@gooddata.com"
-      set_const :DEFAULT_PASSWORD, GoodData::Helpers.decrypt('9m5Fe6WIxtkoG9vi2CanKm/CmZMLTpGYzr2duXh75m8=\n', ENV['GD_SPEC_PASSWORD'] || ENV['BIA_ENCRYPTION_KEY'])
+      set_const :DEFAULT_PASSWORD, GoodData::Helpers.decrypt("HeqNt6NKj7nEB5OEnXHQlsTRLQ3dVfG18gE8YtezgHY=\n", ENV['GD_SPEC_PASSWORD'] || ENV['BIA_ENCRYPTION_KEY'])
       set_const :DEFAULT_DOMAIN, ''
       set_const :DEFAULT_USER_URL, ''
 
@@ -27,7 +27,7 @@ module GoodData
 
     module ProcessHelper
       set_const :PROCESS_ID, ''
-      set_const :DEPLOY_NAME, 'cc/graph/graph.grf'
+      set_const :DEPLOY_NAME, 'main.rb'
     end
 
     module ProjectHelper

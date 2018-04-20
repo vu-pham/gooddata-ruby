@@ -4,221 +4,90 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-require 'gooddata'
+shared_examples 'a blueprint provider' do
+  it 'requests model view with includeCA=true' do
+    expect(client).to receive(:get).with(
+      '/gdc/projects/foo/model/view',
+      hash_including(params: hash_including(includeCA: true))
+    )
+    subject.blueprint(include_ca: true)
+  end
+end
 
-describe GoodData::Project, :constraint => 'slow' do
-  before(:all) do
-    @client = ConnectionHelper.create_default_connection
-    @project = ProjectHelper.get_default_project(:client => @client)
-    @domain = @client.domain(ConnectionHelper::DEFAULT_DOMAIN)
+describe GoodData::Project do
+  subject { GoodData::Project }
+  let(:from_project) { double('from_project') }
+  let(:to_project) { double('to_project') }
+  let(:process) { double('process') }
+  let(:add) { double('add') }
+  let(:output_stage) { double('output_stage') }
+  let(:client) { double('client') }
+  let(:connection) { double('connection') }
+  let(:server) { double('server') }
+
+  before do
+    allow(from_project).to receive(:processes).and_return([process])
+    allow(to_project).to receive(:processes).and_return([])
+    allow(process).to receive(:type).and_return(:dataload)
+    allow(to_project).to receive(:add).and_return(add)
+    allow(to_project).to receive(:client).and_return(client)
+    allow(client).to receive(:connection).and_return(connection)
+    allow(connection).to receive(:server).and_return(server)
+    allow(from_project).to receive(:add).and_return(add)
+    allow(from_project).to receive(:client).and_return(client)
+    allow(add).to receive(:output_stage).and_return(output_stage)
   end
 
-  after(:all) do
-    @client.disconnect
-  end
-
-  describe 'projects' do
-    it 'Can get all projects' do
-      projects = @client.projects
-      expect(projects).to_not be_nil
-      expect(projects).to be_a_kind_of(Array)
-      projects.pmap do |project|
-        expect(project).to be_an_instance_of(GoodData::Project)
-      end
-    end
-
-    it 'Returns project if ID passed' do
-      expect(@project).to_not be_nil
-      expect(@project).to be_a_kind_of(GoodData::Project)
-      expect(@project.pid).to eq @project.pid
-    end
-
-    it 'Returns project if URL passed' do
-      expect(@project).to_not be_nil
-      expect(@project).to be_a_kind_of(GoodData::Project)
-      expect(@project.pid).to eq @project.pid
-    end
-
-    it 'Throws an exception when invalid format of URL passed' do
-      invalid_url = '/gdc/invalid_url'
-      expect { GoodData::Project[invalid_url] }.to raise_error
-    end
-  end
-
-  describe '#all' do
-    it 'Returns all projects' do
-      projects = GoodData::Project.all(:client => @client)
-      expect(projects).to_not be_nil
-      expect(projects).to be_a_kind_of(Array)
-    end
-  end
-
-  describe '#get_role_by_identifier' do
-    it 'Looks up for role by identifier' do
-      role = @project.get_role_by_identifier('readOnlyUserRole')
-      expect(role).to_not be_nil
-      expect(role).to be_a_kind_of(GoodData::ProjectRole)
-    end
-  end
-
-  describe '#get_role_by_summary' do
-    it 'Looks up for role by summary' do
-      role = @project.get_role_by_summary('read only user role')
-      expect(role).to_not be_nil
-      expect(role).to be_a_kind_of(GoodData::ProjectRole)
-    end
-  end
-
-  describe '#get_role_by_title' do
-    it 'Looks up for role by title' do
-      role = @project.get_role_by_title('Viewer')
-      expect(role).to_not be_nil
-      expect(role).to be_a_kind_of(GoodData::ProjectRole)
-    end
-  end
-
-  describe "#member" do
-    it 'Returns GoodData::Membership when looking for existing user using login' do
-      res = @project.get_user(ConnectionHelper::DEFAULT_USERNAME)
-      expect(res).to be_instance_of(GoodData::Membership)
-    end
-
-    it 'Returns GoodData::Membership when looking for existing user using URL' do
-      res = @project.get_user(ConnectionHelper::DEFAULT_USER_URL)
-      expect(res).to be_instance_of(GoodData::Membership)
-    end
-
-    it 'Returns GoodData::Membership when looking for existing user using GoodData::Profile' do
-      user = @project.members.first
-      res = @project.get_user(user)
-      expect(res).to be_instance_of(GoodData::Membership)
-    end
-
-    it 'Returns null for non-existing user' do
-      res = @project.get_user(ConnectionHelper::TEST_USERNAME)
-      expect(res).to be_nil
-    end
-  end
-
-  describe "#member?" do
-    it 'Returns true when looking for existing user using login' do
-      res = @project.member?(ConnectionHelper::DEFAULT_USERNAME)
-      expect(res).to be_truthy
-    end
-
-    it 'Returns true when looking for existing user using URL' do
-      res = @project.member?(ConnectionHelper::DEFAULT_USER_URL)
-      expect(res).to be_truthy
-    end
-
-    it 'Returns true when looking for existing user using GoodData::Profile' do
-      user = @project.members.first
-      res = @project.member?(user)
-      expect(res).to be_truthy
-    end
-
-    it 'Returns false for non-existing user' do
-      res = @project.member?(ConnectionHelper::TEST_USERNAME)
-      expect(res).to be_falsey
-    end
-
-    it 'Returns true for existing user when using optional list' do
-      list = @project.members
-      res = @project.member?(ConnectionHelper::DEFAULT_USERNAME, list)
-      expect(res).to be_truthy
-    end
-
-    it 'Returns false for non-existing user when using optional list' do
-      list = []
-      res = @project.member?(ConnectionHelper::DEFAULT_USERNAME, list)
-      expect(res).to be_falsey
-    end
-  end
-
-  describe '#members?' do
-    it 'Returns array of bools when looking for existing users using GoodData::Profile' do
-      users = @project.members.take(10)
-      res = @project.members?(users)
-      expect(res.all?).to be_truthy
-    end
-
-    it 'Support variety of inputs' do
-      users = @project.members.take(1)
-      res = @project.members?(users + [ConnectionHelper::TEST_USERNAME])
-      expect(res).to eq [true, false]
-    end
-  end
-
-  describe '#roles' do
-    it 'Returns array of GoodData::ProjectRole' do
-      roles = @project.roles
-      expect(roles).to be_instance_of(Array)
-
-      roles.each do |role|
-        expect(role).to be_instance_of(GoodData::ProjectRole)
-      end
-    end
-  end
-
-  describe '#export_clone' do
-    context 'when exclude_schedule is true' do
-      let(:options) { { exclude_schedules: true } }
-      let(:clone) { GoodData::Project.create(title: 'project clone', client: @client, auth_token: ConnectionHelper::GD_PROJECT_TOKEN) }
-
-      after do
-        clone.delete if clone
-      end
-
-      it 'excludes scheduled emails' do
-        @project.schedule_mail.save
-        export_token = @project.export_clone(options)
-        clone.import_clone(export_token)
-        expect(@project.scheduled_mails.to_a).not_to be_empty
-        expect(clone.scheduled_mails.to_a).to be_empty
-      end
-    end
-
-    context 'when cross_data_center_export is true' do
-      it 'is ok' do
-        # there are no staging environments on other datacenters
-        # so just checking if the parameter gets accepted
-        @project.export_clone(cross_data_center_export: true)
-      end
-    end
-
-    context 'when export task fails' do
-      let(:fail_response) do
-        response = { taskState: { status: 'ERROR' } }
-        GoodData::Helpers.stringify_keys(response)
-      end
-
+  describe '.transfer_output_stage' do
+    context 'when source and target domains are different' do
       before do
-        allow(@client)
-          .to receive(:poll_on_response).and_return(fail_response)
+        allow(server).to receive(:url).and_return('foo', 'bar')
       end
 
-      it 'raises ExportCloneError' do
-        expect { @project.export_clone }.to raise_error(GoodData::ExportCloneError)
+      it 'raises an error' do
+        expect { subject.transfer_output_stage(from_project, to_project, {}) }
+          .to raise_error(/Cannot transfer output stage from foo to bar/)
       end
     end
   end
 
-  describe '#import_clone' do
-    let(:clone) { GoodData::Project.create(title: 'import clone test', client: @client, auth_token: ConnectionHelper::GD_PROJECT_TOKEN) }
-    let(:fail_response) do
-      response = { taskState: { status: 'ERROR' } }
-      GoodData::Helpers.stringify_keys(response)
+  describe '#blueprint' do
+    let(:project_data) do
+      {
+        'project' => {
+          'links' => { 'self' => '/gdc/foo' },
+          'meta' => { 'title' => 'My Project' }
+        }
+      }
+    end
+    let(:diff_result) do
+      { 'asyncTask' => { 'link' => { 'poll' => 'poll_me' } } }
+    end
+    let(:blueprint) { double(GoodData::Model::ProjectBlueprint) }
+    subject { GoodData::Project.new(project_data) }
+    before do
+      allow(client).to receive(:get).and_return(diff_result)
+      allow(client).to receive(:poll_on_code)
+      allow(GoodData::Model::FromWire).to receive(:from_wire) .and_return(blueprint)
+      allow(blueprint).to receive(:title=)
+      subject.client = client
     end
 
-    after do
-      clone.delete if clone
+    context 'when include_ca option is true' do
+      it_behaves_like 'a blueprint provider'
     end
 
-    context 'when import task fails' do
-      it 'raises ImportCloneError' do
-        export_token = @project.export_clone
-        allow(@client).to receive(:poll_on_response).and_return(fail_response)
-        expect { clone.import_clone(export_token) }.to raise_error(GoodData::ImportCloneError)
+    context 'when include_ca option is not specified' do
+      it_behaves_like 'a blueprint provider'
+    end
+
+    context 'when include_ca option is false' do
+      it 'requests model view with includeCA=false' do
+        expect(client).to receive(:get).with(
+          '/gdc/projects/foo/model/view',
+          hash_including(params: hash_including(includeCA: false))
+        )
+        subject.blueprint(include_ca: false)
       end
     end
   end

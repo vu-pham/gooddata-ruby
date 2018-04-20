@@ -12,31 +12,31 @@ module GoodData
       DESCRIPTION = 'Collect Segments from API'
 
       PARAMS = define_params(self) do
-        description 'Client Used for Connecting to GD'
-        param :gdc_gd_client, instance_of(Type::GdClientType), required: true
-
-        description 'Organization Name'
-        param :organization, instance_of(Type::StringType), required: true
 
         description 'Segments to provision'
         param :segments_filter, array_of(instance_of(Type::StringType)), required: false
+
+        description 'DataProduct'
+        param :data_product, instance_of(Type::GDDataProductType), required: false
+
+        description 'Logger'
+        param :gdc_logger, instance_of(Type::GdLogger), required: true
       end
 
       class << self
         def call(params)
-          client = params.gdc_gd_client
-
-          domain_name = params.organization || params.domain
-          domain = client.domain(domain_name) || fail("Invalid domain name specified - #{domain_name}")
-          domain_segments = domain.segments
+          data_product = params.data_product
+          data_product_segments = data_product.segments
+          params.gdc_logger.info("Domain segments: #{data_product_segments}")
 
           if params.segments_filter
-            domain_segments.select! do |segment|
+            params.gdc_logger.info("Segments filter: #{params.segments_filter}")
+            data_product_segments.select! do |segment|
               params.segments_filter.include?(segment.segment_id)
             end
           end
 
-          segments = domain_segments.pmap do |segment|
+          segments = data_product_segments.pmap do |segment|
             project = nil
 
             begin
@@ -52,7 +52,8 @@ module GoodData
               segment_id: segment.segment_id,
               development_pid: project.pid,
               driver: project.driver.downcase,
-              master_name: project.title
+              master_name: project.title,
+              uri: segment.uri
             }
           end
 

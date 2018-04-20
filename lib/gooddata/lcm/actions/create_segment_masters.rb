@@ -15,11 +15,14 @@ module GoodData
         description 'Client Used for Connecting to GD'
         param :gdc_gd_client, instance_of(Type::GdClientType), required: true
 
-        description 'Development Client Used for Connecting to GD'
+        description 'Client used to connecting to development domain'
         param :development_client, instance_of(Type::GdClientType), required: true
 
         description 'Organization Name'
-        param :organization, instance_of(Type::StringType), required: true
+        param :organization, instance_of(Type::StringType), required: false
+
+        description 'Domain'
+        param :domain, instance_of(Type::StringType), required: false
 
         description 'ADS Client'
         param :ads_client, instance_of(Type::AdsClientType), required: true
@@ -32,6 +35,15 @@ module GoodData
 
         description 'Table Name'
         param :release_table_name, instance_of(Type::StringType), required: false
+
+        description 'Project Environment'
+        param :project_environment, instance_of(Type::StringType), required: false
+
+        description 'DataProduct to manage'
+        param :data_product, instance_of(Type::GDDataProductType), required: false
+
+        description 'Logger'
+        param :gdc_logger, instance_of(Type::GdLogger), required: true
       end
 
       DEFAULT_TABLE_NAME = 'LCM_RELEASE'
@@ -44,8 +56,10 @@ module GoodData
           development_client = params.development_client
 
           domain_name = params.organization || params.domain
+          fail "Either organisation or domain has to be specified in params" unless domain_name
           domain = client.domain(domain_name) || fail("Invalid domain name specified - #{domain_name}")
-          domain_segments = domain.segments
+          data_product = params.data_product
+          domain_segments = domain.segments(:all, data_product)
 
           # TODO: Support for 'per segment' provisioning
           segments = params.segments
@@ -55,6 +69,7 @@ module GoodData
             development_pid = segment_in.development_pid
             driver = segment_in.driver.downcase
             token = params.tokens[driver.to_sym] || fail("Token for driver '#{driver}' was not specified")
+            ads_output_stage_uri = segment_in.ads_output_stage_uri
 
             # Create master project Postgres
             version = get_project_version(params, segment_id) + 1
@@ -70,7 +85,7 @@ module GoodData
 
             # Create new master project
             params.gdc_logger.info "Creating master project - name: '#{master_name}' development_project: '#{development_pid}', segment: '#{segment_id}', driver: '#{driver}'"
-            project = client.create_project(title: master_name, auth_token: token, driver: driver == 'vertica' ? 'vertica' : 'Pg')
+            project = client.create_project(title: master_name, auth_token: token, driver: driver == 'vertica' ? 'vertica' : 'Pg', environment: params.project_environment)
 
             # Does segment exists? If not, create new one and set initial master
             if segment
@@ -78,7 +93,7 @@ module GoodData
               status = 'untouched'
             else
               params.gdc_logger.info "Creating segment #{segment_id}, master #{project.pid}"
-              segment = domain.create_segment(segment_id: segment_id, master_project: project)
+              segment = data_product.create_segment(segment_id: segment_id, master_project: project)
               segment.synchronize_clients
               segment_in[:is_new] = true
               status = 'created'
@@ -112,6 +127,7 @@ module GoodData
               name: master_name,
               development_pid: development_pid,
               master_pid: project.pid,
+              ads_output_stage_uri: ads_output_stage_uri,
               driver: driver,
               status: status
             }
@@ -119,7 +135,8 @@ module GoodData
             {
               segment: segment_id,
               from: development_pid,
-              to: [{ pid: project.pid }]
+              to: [{ pid: project.pid }],
+              ads_output_stage_uri: ads_output_stage_uri
             }
           end
 

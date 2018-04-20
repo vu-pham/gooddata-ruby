@@ -140,7 +140,9 @@ module GoodData
 
         project = create_object(opts)
         project.save
-        # until it is enabled or deleted, recur. This should still end if there is a exception thrown out from RESTClient. This sometimes happens from WebApp when request is too long
+        # until it is enabled or deleted, recur. This should still end if there
+        # is a exception thrown out from RESTClient. This sometimes happens from
+        # WebApp when request is too long
         while project.state.to_s != 'enabled'
           if project.deleted?
             # if project is switched to deleted state, fail. This is usually problem of creating a template which is invalid.
@@ -220,7 +222,10 @@ module GoodData
       # Clones project along with etl and schedules.
       #
       # @param client [GoodData::Rest::Client] GoodData client to be used for connection
-      # @param from_project [GoodData::Project | GoodData::Segment | GoodData:Client | String] Object to be cloned from. Can be either segment in which case we take the master, client in which case we take its project, string in which case we treat is as an project object or directly project
+      # @param from_project [GoodData::Project | GoodData::Segment | GoodData:Client | String]
+      # Object to be cloned from. Can be either segment in which case we
+      # take the master, client in which case we take its project, string
+      # in which case we treat is as an project object or directly project
       # @param to_project [GoodData::Project | GoodData::Segment | GoodData:Client | String]
       def transfer_etl(client, from_project, to_project)
         from_project = case from_project
@@ -251,39 +256,60 @@ module GoodData
       def transfer_processes(from_project, to_project, options = {})
         options = GoodData::Helpers.symbolize_keys(options)
         to_project_processes = to_project.processes
-        from_project.processes.uniq(&:name).each do |process|
+        result = from_project.processes.uniq(&:name).map do |process|
           fail "The process name #{process.name} must be unique in transfered project #{to_project}" if to_project_processes.count { |p| p.name == process.name } > 1
+          next if process.type == :dataload
           to_process = to_project_processes.find { |p| p.name == process.name }
 
-          if process.path
-            to_process.delete if to_process
-            GoodData::Process.deploy_from_appstore(process.path, name: process.name, client: to_project.client, project: to_project)
-          elsif process.type != :dataload
-            Dir.mktmpdir('etl_transfer') do |dir|
-              dir = Pathname(dir)
-              filename = dir + 'process.zip'
-              File.open(filename, 'w') do |f|
-                f << process.download
-              end
+          to_process = if process.path
+                         to_process.delete if to_process
+                         GoodData::Process.deploy_from_appstore(process.path, name: process.name, client: to_project.client, project: to_project)
+                       else
+                         Dir.mktmpdir('etl_transfer') do |dir|
+                           dir = Pathname(dir)
+                           filename = dir + 'process.zip'
+                           File.open(filename, 'w') do |f|
+                             f << process.download
+                           end
 
-              to_process ? to_process.deploy(filename, type: process.type, name: process.name) : to_project.deploy_process(filename, type: process.type, name: process.name)
-            end
-          end
+                           if to_process
+                             to_process.deploy(filename, type: process.type, name: process.name)
+                           else
+                             to_project.deploy_process(filename, type: process.type, name: process.name)
+                           end
+                         end
+                       end
+
+          {
+            from: from_project.pid,
+            to: to_project.pid,
+            name: process.name,
+            status: to_process ? 'successful' : 'failed'
+          }
         end
 
         transfer_output_stage(from_project, to_project, options)
+        result << {
+          from: from_project.pid,
+          to: to_project.pid,
+          name: 'Automated Data Distribution',
+          status: 'successful'
+        }
 
         res = (from_project.processes + to_project.processes).map { |p| [p, p.name, p.type] }
         res.group_by { |x| [x[1], x[2]] }
           .select { |_, procs| procs.length == 1 && procs[2] != :dataload }
           .flat_map { |_, procs| procs.select { |p| p[0].project.pid == to_project.pid }.map { |p| p[0] } }
           .peach(&:delete)
+
+        result.compact
       end
 
       def transfer_user_groups(from_project, to_project)
-        from_project.user_groups.each do |ug|
+        from_project.user_groups.map do |ug|
           # migrate groups
           new_group = to_project.user_groups.select { |group| group.name == ug.name }.first
+          new_group_status = new_group ? 'modified' : 'created'
           new_group ||= UserGroup.create(:name => ug.name, :description => ug.description, :project => to_project)
           new_group.project = to_project
           new_group.description = ug.description
@@ -298,17 +324,32 @@ module GoodData
             permission = grantee['aclEntryURI']['permission']
             new_dashboard.grant(:member => new_group, :permission => permission)
           end
+
+          {
+            from: from_project.pid,
+            to: to_project.pid,
+            user_group: new_group.name,
+            status: new_group_status
+          }
         end
       end
 
       # Clones project along with etl and schedules.
       #
       # @param client [GoodData::Rest::Client] GoodData client to be used for connection
-      # @param from_project [GoodData::Project | GoodData::Segment | GoodData:Client | String] Object to be cloned from. Can be either segment in which case we take the master, client in which case we take its project, string in which case we treat is as an project object or directly project
+      # @param from_project [GoodData::Project | GoodData::Segment | GoodData:Client | String]
+      # Object to be cloned from. Can be either segment in which case we take
+      # the master, client in which case we take its project, string in which
+      # case we treat is as an project object or directly project.
       def transfer_schedules(from_project, to_project)
-        cache = to_project
-                  .processes.sort_by(&:name)
-                  .zip(from_project.processes.sort_by(&:name))
+        to_project_processes = to_project.processes.sort_by(&:name)
+        from_project_processes = from_project.processes.sort_by(&:name)
+
+        GoodData.logger.debug("Processes in from project #{from_project.pid}: #{from_project_processes.map(&:name).join(', ')}")
+        GoodData.logger.debug("Processes in to project #{to_project.pid}: #{to_project_processes.map(&:name).join(', ')}")
+
+        cache = to_project_processes
+                  .zip(from_project_processes)
                   .flat_map do |remote, local|
                     local.schedules.map do |schedule|
                       [remote, local, schedule]
@@ -369,7 +410,7 @@ module GoodData
             if process_spec.type != :dataload
               executable = schedule_spec[:executable] || (process_spec.type == :ruby ? 'main.rb' : 'main.grf')
             end
-            params = schedule_parameters(to_project.pid, schedule_spec)
+            params = schedule_parameters(schedule_spec)
             created_schedule = remote_process.create_schedule(schedule_spec[:cron] || schedule_cache[schedule_spec[:after]], executable, params)
             schedule_cache[created_schedule.name] = created_schedule
 
@@ -450,9 +491,9 @@ module GoodData
 
       private
 
-      def schedule_parameters(id, schedule_spec)
+      def schedule_parameters(schedule_spec)
         {
-          params: schedule_spec[:params].merge('PROJECT_ID' => id),
+          params: schedule_spec[:params],
           hidden_params: schedule_spec[:hidden_params],
           name: schedule_spec[:name],
           reschedule: schedule_spec[:reschedule],
@@ -566,10 +607,11 @@ module GoodData
     #
     # @return [GoodData::ProjectRole] Project role if found
     def blueprint(options = {})
-      result = client.get("/gdc/projects/#{pid}/model/view", params: { includeDeprecated: true, includeGrain: true, includeCA: true })
+      options = { include_ca: true }.merge(options)
+      result = client.get("/gdc/projects/#{pid}/model/view", params: { includeDeprecated: true, includeGrain: true, includeCA: options[:include_ca] })
       polling_url = result['asyncTask']['link']['poll']
       model = client.poll_on_code(polling_url, options)
-      bp = GoodData::Model::FromWire.from_wire(model, { include_ca: true }.merge(options))
+      bp = GoodData::Model::FromWire.from_wire(model, options)
       bp.title = title
       bp
     end
@@ -722,6 +764,7 @@ module GoodData
     def data_permissions(id = :all)
       GoodData::MandatoryUserFilter[id, client: client, project: self]
     end
+    alias_method :user_filters, :data_permissions
 
     # Deletes project
     def delete
@@ -1067,7 +1110,7 @@ module GoodData
     # @param [String] key key of the value to be stored
     # @return [String] val value to be stored
     def set_metadata(key, val)
-      GoodData::ProjectMetadata[key, client: client, project: self] = val
+      GoodData::ProjectMetadata.[]=(key, { client: client, project: self }, val)
     end
 
     # Helper for getting metrics of a project
@@ -1136,7 +1179,12 @@ module GoodData
       end
 
       objs = objs.pmap { |obj| [obj, objects(obj)] }
-      fail ObjectsExportError, "Exporting objects failed with messages. Object #{objs.select { |_, obj| obj.nil? }.map { |o, _| o }.join(', ')} could not be found." if objs.any? { |_, obj| obj.nil? }
+      if objs.any? { |_, obj| obj.nil? }
+        object = objs.select { |_, obj| obj.nil? }.map { |o, _| o }.join(', ')
+        error_message = "Exporting objects failed with messages. " \
+                        "Object #{object} could not be found."
+        fail ObjectsExportError, error_message
+      end
       export_payload = {
         :partialMDExport => {
           :uris => objs.map { |_, obj| obj.uri },
@@ -1172,7 +1220,8 @@ module GoodData
         :partialMDImport => {
           :token => token,
           :overwriteNewer => '1',
-          :updateLDMObjects => '0'
+          :updateLDMObjects => '1',
+          :importAttributeProperties => '1'
         }
       }
 
@@ -1197,7 +1246,10 @@ module GoodData
     # @option options [GoodData::Project | String | Array<String> | Array<GoodData::Project>] :project Project(s) to migrate to
     # @option options [Number] :batch_size Number of projects that are migrated at the same time. Default is 10
     #
-    # @return [Boolean | Array<Hash>] Return either true or throws exception if you passed only one project. If you provided an array returns list of hashes signifying sucees or failure. Take note that in case of list of projects it does not throw exception
+    # @return [Boolean | Array<Hash>] Return either true or throws exception
+    # if you passed only one project. If you provided an array returns list
+    # of hashes signifying sucees or failure. Take note that in case of list
+    # of projects it does not throw exception.
     def partial_md_export(objects, options = {})
       projects = options[:project]
       batch_size = options[:batch_size] || 10
@@ -1284,7 +1336,9 @@ module GoodData
       self
     end
 
-    # Method used for walking through objects in project and trying to replace all occurences of some object for another object. This is typically used as a means for exchanging Date dimensions.
+    # Method used for walking through objects in project and trying to
+    # replace all occurences of some object for another object. This is
+    # typically used as a means for exchanging Date dimensions.
     #
     # @param mapping [Array<Array>] Mapping specifying what should be exchanged for what. As mapping should be used output of GoodData::Helpers.prepare_mapping.
     def replace_from_mapping(mapping, opts = {})
@@ -1364,6 +1418,27 @@ module GoodData
       variables.each do |var|
         var.values.peach do |val|
           val.replace(mapping).save unless dry_run
+        end
+      end
+
+      {
+        visualizations: MdObject.query('visualizationObject', MdObject, client: client, project: self),
+        visualization_widgets: MdObject.query('visualizationWidget', MdObject, client: client, project: self),
+        kpis: MdObject.query('kpi', MdObject, client: client, project: self)
+      }.each do |key, collection|
+        GoodData.logger.info "Replacing #{key}"
+        collection.each do |item|
+          new_item = MdObject.replace_quoted(item, mapping)
+          if new_item.json != item.json
+            if dry_run
+              GoodData.logger.info "Would save #{new_item.uri}. Running in dry run mode"
+            else
+              GoodData.logger.info "Saving #{new_item.uri}"
+              new_item.save
+            end
+          else
+            GoodData.logger.info "Ignore #{item.uri}"
+          end
         end
       end
       nil
@@ -1472,18 +1547,6 @@ module GoodData
       data['links']['self'] if data && data['links'] && data['links']['self']
     end
 
-    # List of user filters within this project
-    #
-    # @return [Array<GoodData::MandatoryUserFilter>] List of mandatory user
-    def user_filters
-      url = "/gdc/md/#{pid}/userfilters"
-
-      tmp = client.get(url)
-      tmp['userFilters']['items'].pmap do |filter|
-        client.create(GoodData::MandatoryUserFilter, filter, project: self)
-      end
-    end
-
     # List of users in project
     #
     #
@@ -1548,7 +1611,7 @@ module GoodData
     def import_users(new_users, options = {})
       role_list = roles
       users_list = users
-      new_users = new_users.map { |x| (x.is_a?(Hash) && x[:user] && x[:user].to_hash.merge(role: x[:role])) || x.to_hash }
+      new_users = new_users.map { |x| ((x.is_a?(Hash) && x[:user] && x[:user].to_hash.merge(role: x[:role])) || x.to_hash).tap { |u| u[:login].downcase! } }
 
       GoodData.logger.warn("Importing users to project (#{pid})")
 
@@ -1619,22 +1682,24 @@ module GoodData
       @log_formatter.log_updated_users(updated_users_result, diff[:changed], role_list)
       results.concat(updated_users_result)
 
-      # Remove old users
-      to_disable = diff[:removed].reject { |user| user[:status] == 'DISABLED' || user[:status] == :disabled }
-      GoodData.logger.warn("Disabling #{to_disable.count} users from project (#{pid})")
-      disabled_users_result = disable_users(to_disable, roles: role_list, project_users: whitelisted_users)
-      @log_formatter.log_disabled_users(disabled_users_result)
-      results.concat(disabled_users_result)
+      unless options[:do_not_touch_users_that_are_not_mentioned]
+        # Remove old users
+        to_disable = diff[:removed].reject { |user| user[:status] == 'DISABLED' || user[:status] == :disabled }
+        GoodData.logger.warn("Disabling #{to_disable.count} users from project (#{pid})")
+        disabled_users_result = disable_users(to_disable, roles: role_list, project_users: whitelisted_users)
+        @log_formatter.log_disabled_users(disabled_users_result)
+        results.concat(disabled_users_result)
 
-      # Remove old users completely
-      if options[:remove_users_from_project]
-        to_remove = (to_disable + users(disabled: true).to_a).map(&:to_hash).uniq do |user|
-          user[:uri]
+        # Remove old users completely
+        if options[:remove_users_from_project]
+          to_remove = (to_disable + users(disabled: true).to_a).map(&:to_hash).uniq do |user|
+            user[:uri]
+          end
+          GoodData.logger.warn("Removing #{to_remove.count} users from project (#{pid})")
+          removed_users_result = remove_users(to_remove)
+          @log_formatter.log_removed_users(removed_users_result)
+          results.concat(removed_users_result)
         end
-        GoodData.logger.warn("Removing #{to_remove.count} users from project (#{pid})")
-        removed_users_result = remove_users(to_remove)
-        @log_formatter.log_removed_users(removed_users_result)
-        results.concat(removed_users_result)
       end
 
       # reassign to groups
@@ -1699,7 +1764,11 @@ module GoodData
           create_group(name: g, description: g)
         end
       else
-        fail "All groups have to be specified before you try to import users. Groups that are currently in project are #{groups.join(',')} and you asked for #{missing_groups.join(',')}" unless missing_groups.empty?
+        unless missing_groups.empty?
+          fail 'All groups have to be specified before you try to import ' \
+            'users. Groups that are currently in project are ' \
+            "#{groups.join(',')} and you asked for #{missing_groups.join(',')}"
+        end
       end
     end
 
@@ -1748,7 +1817,11 @@ module GoodData
         client.post("#{uri}/users", 'users' => payload)
       end
       # this ugly line turns the hash of errors into list of errors with types so we can process them easily
-      typed_results = results.flat_map { |x| x['projectUsersUpdateResult'].flat_map { |k, v| v.map { |v2| v2.is_a?(String) ? { type: k.to_sym, user: v2 } : GoodData::Helpers.symbolize_keys(v2).merge(type: k.to_sym) } } }
+      typed_results = results.flat_map do |x|
+        x['projectUsersUpdateResult'].flat_map do |k, v|
+          v.map { |v2| v2.is_a?(String) ? { type: k.to_sym, user: v2 } : GoodData::Helpers.symbolize_keys(v2).merge(type: k.to_sym) }
+        end
+      end
       # we have to concat errors from role resolution and API result
       typed_results + (users_by_type[:failed] || [])
     end
@@ -1855,6 +1928,22 @@ module GoodData
       GoodData::StyleSetting.reset(client: client, project: self)
     end
 
+    # get maql diff from another project or blueprint to current project
+    #
+    # @param options [Hash] options
+    # @option options [GoodData::Project] :project source project
+    # @option options [GoodData::Model::ProjectBlueprint] :blueprint blueprint of source project
+    # @option options [Array] :params additional parameters for diff api
+    # @return [Hash] project model diff
+    def maql_diff(options = {})
+      fail "No :project or :blueprint specified" unless options[:blueprint] || options[:project]
+      bp = options[:blueprint] || options[:project].blueprint
+      uri = "/gdc/projects/#{pid}/model/diff"
+      params = Hash[(options[:params] || []).map { |i| [i, true] }]
+      result = client.post(uri, bp.to_wire, params: params)
+      client.poll_on_code(result['asyncTask']['link']['poll'])
+    end
+
     private
 
     def send_mail_to_new_users(users, email_options)
@@ -1891,14 +1980,14 @@ module GoodData
       server_side_encryption = options['email_server_side_encryption'] || false
       args['s3_server_side_encryption'] = :aes256 if server_side_encryption
 
-      s3 = AWS::S3.new(args)
-      bucket = s3.buckets[bucket]
+      s3 = Aws::S3::Resource.new(args)
+      bucket = s3.bucket(bucket)
       process_email_template(bucket, path)
     end
 
     def process_email_template(bucket, path)
       type = path.split('/').last.include?('.html') ? 'html' : 'txt'
-      body = bucket.objects[path].read
+      body = bucket.object(path).read
       body.prepend("MIME-Version: 1.0\nContent-type: text/html\n") if type == 'html'
       body
     end

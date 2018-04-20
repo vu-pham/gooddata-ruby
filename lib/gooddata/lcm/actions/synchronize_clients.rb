@@ -15,8 +15,14 @@ module GoodData
         description 'Client Used for Connecting to GD'
         param :gdc_gd_client, instance_of(Type::GdClientType), required: true
 
+        description 'DataProduct to manage'
+        param :data_product, instance_of(Type::GDDataProductType), required: false
+
         description 'Organization Name'
-        param :organization, instance_of(Type::StringType), required: true
+        param :organization, instance_of(Type::StringType), required: false
+
+        description 'Domain'
+        param :domain, instance_of(Type::StringType), required: false
 
         description 'Segments to manage'
         param :segments, array_of(instance_of(Type::SegmentType)), required: true
@@ -26,15 +32,16 @@ module GoodData
 
         description 'ADS Client'
         param :ads_client, instance_of(Type::AdsClientType), required: true
+
+        description 'Additional Hidden Parameters'
+        param :additional_hidden_params, instance_of(Type::HashType), required: false
       end
 
       RESULT_HEADER = [
         :segment,
         :successful_count,
-        :failed_count,
         :master_name,
-        :master_pid,
-        # :details
+        :master_pid
       ]
 
       DEFAULT_TABLE_NAME = 'LCM_RELEASE'
@@ -44,8 +51,10 @@ module GoodData
           client = params.gdc_gd_client
 
           domain_name = params.organization || params.domain
+          fail "Either organisation or domain has to be specified in params" unless domain_name
           domain = client.domain(domain_name) || fail("Invalid domain name specified - #{domain_name}")
-          domain_segments = domain.segments
+          data_product = params.data_product
+          domain_segments = domain.segments(:all, data_product)
 
           segments = params.segments.map do |seg|
             domain_segments.find do |s|
@@ -73,14 +82,18 @@ module GoodData
             res = segment.synchronize_clients
 
             sync_result = res.json['synchronizationResult']
+            failed_count = sync_result['failedClients']['count']
+
+            if failed_count.to_i > 0
+              fail("#{failed_count} clients failed to synchronize. " \
+                   "Details: #{sync_result['links']['details']}")
+            end
 
             {
               segment: segment.id,
               master_pid: master.pid,
               master_name: master.title,
-              successful_count: sync_result['successfulClients']['count'],
-              failed_count: sync_result['failedClients']['count'],
-              # details: sync_result['links']['details']
+              successful_count: sync_result['successfulClients']['count']
             }
           end
 

@@ -15,46 +15,13 @@ require_relative '../exceptions/exceptions'
 
 require_relative '../helpers/global_helpers'
 
-module RestClient
-  module AbstractResponse
-    alias_method :old_follow_redirection, :follow_redirection
-    def follow_redirection(request = nil, result = nil, &block)
-      fail 'Using monkey patched version of RestClient::AbstractResponse#follow_redirection which is guaranteed to be compatible only with RestClient 1.8.0' if RestClient::VERSION != '1.8.0'
-
-      new_args = @args.dup
-
-      url = headers[:location]
-      url = URI.parse(request.url).merge(url).to_s if url !~ /^http/
-
-      new_args[:url] = url
-      if request
-        fail MaxRedirectsReached if request.max_redirects.zero?
-        new_args[:password] = request.password
-        new_args[:user] = request.user
-        new_args[:headers] = request.headers
-        new_args[:max_redirects] = request.max_redirects - 1
-
-        # TODO: figure out what to do with original :cookie, :cookies values
-        new_args[:cookies] = get_redirection_cookies(request, result, new_args)
-      end
-
-      Request.execute(new_args, &block)
-    end
-
-    # Returns cookies which should be passed when following redirect
-    #
-    # @param request [RestClient::Request] Original request
-    # @param result [Net::HTTPResponse] Response
-    # @param args [Hash] Original arguments
-    # @return [Hash] Cookies to be passsed when following redirect
-    def get_redirection_cookies(request, _result, _args)
-      request.cookies
-    end
-  end
-end
+require_relative 'phmap'
 
 module GoodData
   module Rest
+    class RestRetryError < StandardError
+    end
+
     # Wrapper of low-level HTTP/REST client/library
     class Connection
       include MonitorMixin
@@ -201,10 +168,20 @@ module GoodData
 
         # Reset old cookies first
         if options[:sst_token]
-          merge_headers!(:x_gdc_authsst => options[:sst_token])
+          headers = {
+            :x_gdc_authsst => options[:sst_token],
+            :x_gdc_authtt => options[:tt_token]
+          }
+          merge_headers!(headers)
           get('/gdc/account/token', @request_params)
 
           @user = get(get('/gdc/app/account/bootstrap')['bootstrapResource']['accountSetting']['links']['self'])
+          GoodData.logger.info("Connected using SST to server #{@server.url} to profile \"#{@user['accountSetting']['login']}\"")
+          @auth = {}
+          refresh_token :dont_reauth => true
+        elsif  options[:headers][:x_gdc_authsst]
+          @request_params = options[:headers]
+          @user = get('/gdc/app/account/bootstrap')['bootstrapResource']
           GoodData.logger.info("Connected using SST to server #{@server.url} to profile \"#{@user['accountSetting']['login']}\"")
           @auth = {}
           refresh_token :dont_reauth => true
@@ -246,6 +223,9 @@ module GoodData
         reset_headers!
       end
 
+      # @param what Address of the remote file.
+      # @param where Full path to the target file.
+      # @option [Bool] :url_encode ('true') URL encode the address.
       def download(what, where, options = {})
         # handle the path (directory) given in what
         ilast_slash = what.rindex('/')
@@ -274,7 +254,8 @@ module GoodData
         staging_uri = options[:staging_url].to_s
 
         base_url = dir.empty? ? staging_uri : URI.join("#{server}", staging_uri, "#{dir}/").to_s
-        url = URI.join("#{server}", base_url, CGI.escape(what)).to_s
+        sanitized_what = options[:url_encode] == false ? what : CGI.escape(what)
+        url = URI.join("#{server}", base_url, sanitized_what).to_s
 
         b = proc do |f|
           raw = {
@@ -284,14 +265,16 @@ module GoodData
             :verify_ssl => verify_ssl
           }
           RestClient::Request.execute(raw) do |chunk, _x, response|
-            if response.code.to_s != '200'
+            if response.code.to_s == '202'
+              fail RestRetryError, 'Got 202, retry'
+            elsif response.code.to_s != '200'
               fail ArgumentError, "Error downloading #{url}. Got response: #{response.code} #{response} #{response.body}"
             end
             f.write chunk
           end
         end
 
-        GoodData::Rest::Connection.retryable(:tries => Helpers::GD_MAX_RETRY, :refresh_token => proc { refresh_token }) do
+        GoodData::Rest::Connection.retryable(:tries => Helpers::GD_MAX_RETRY, :refresh_token => proc { refresh_token }, :on => RestRetryError) do
           if where.is_a?(IO) || where.is_a?(StringIO)
             b.call(where)
           else
@@ -501,13 +484,22 @@ module GoodData
                                           :verify_ssl => verify_ssl,
                                           :headers => @webdav_headers.merge(:x_gdc_authtt => headers[:x_gdc_authtt]),
                                           :payload => File.new(filename, 'rb'))
-        request.execute
+
+        begin
+          request.execute
+        rescue => e
+          GoodData.logger.error("Error when uploading file #{filename}", e)
+          raise e
+        end
       end
 
       def format_error(e, params = {})
         return e unless e.respond_to?(:response)
         error = MultiJson.load(e.response)
         message = GoodData::Helpers.interpolate_error_message(error)
+        if error && error['error'] && error['error']['errorClass'] == 'com.gooddata.security.authorization.AuthorizationFailedException'
+          message = "#{message}, accessing with #{user['accountSetting']['login']}"
+        end
         <<-ERR
 
 #{e}: #{message}
@@ -568,7 +560,6 @@ ERR
         merge_headers! response.headers
         content_type = response.headers[:content_type]
         return response if process == false
-
         if content_type == 'application/json' || content_type == 'application/json;charset=UTF-8'
           result = response.to_str == '""' ? {} : MultiJson.load(response.to_str)
           GoodData.rest_logger.debug "Request ID: #{response.headers[:x_gdc_request]} - Response: #{result.inspect}"
@@ -578,12 +569,19 @@ ERR
         elsif content_type == 'application/zip'
           result = response
           GoodData.rest_logger.debug 'Response: a zipped stream'
+        elsif content_type == 'text/csv'
+          result = response
+          GoodData.rest_logger.debug 'Response: CSV text'
         elsif response.headers[:content_length].to_s == '0'
           result = nil
           GoodData.rest_logger.debug 'Response: Empty response possibly 204'
         elsif response.code == 204
           result = nil
           GoodData.rest_logger.debug 'Response: 204 no content'
+        elsif response.code == 200 && content_type.nil? && response.body.empty?
+          result = nil
+          # TMA-696
+          GoodData.rest_logger.warn 'Got response status 200 but no content-type and body.'
         else
           fail "Unsupported response content type '%s':\n%s" % [content_type, response.to_str[0..127]]
         end
@@ -619,61 +617,6 @@ ERR
         new_params
       end
 
-      # TODO: Store PH_MAP for wildcarding of URLs in reports in separate file
-      PH_MAP = [
-        ['/gdc/account/profile/{id}', %r{/gdc/account/profile/[\w]+}],
-        ['/gdc/account/login/{id}', %r{/gdc/account/login/[\w]+}],
-        ['/gdc/account/domains/{id}/users?login={login}', %r{/gdc/account/domains/[\w\d-]+/users\?login=[^&$]+}],
-        ['/gdc/account/domains/{id}', %r{/gdc/account/domains/[\w\d-]+}],
-
-        ['/gdc/app/projects/{id}/execute', %r{/gdc/app/projects/[\w]+/execute}],
-
-        ['/gdc/datawarehouse/instances/{id}', %r{/gdc/datawarehouse/instances/[\w]+}],
-        ['/gdc/datawarehouse/executions/{id}', %r{/gdc/datawarehouse/executions/[\w]+}],
-
-        ['/gdc/domains/{id}/segments/{segment}/synchronizeClients/results/{result}/details?offset={offset}&limit={limit}', %r{/gdc/domains/[\w]+/segments/[\w-]+/synchronizeClients/results/[\w]+/details/\?offset=[\d]+&limit=[\d]+}],
-        ['/gdc/domains/{id}/segments/{segment}/synchronizeClients/results/{result}', %r{/gdc/domains/[\w]+/segments/[\w-]+/synchronizeClients/results/[\w]+}],
-        ['/gdc/domains/{id}/segments/{segment}/', %r{/gdc/domains/[\w]+/segments/[\w-]+/}],
-        ['/gdc/domains/{id}/segments/{segment}', %r{/gdc/domains/[\w]+/segments/[\w-]+}],
-        ['/gdc/domains/{id}/clients?segment={segment}', %r{/gdc/domains/[\w]+/clients\?segment=[\w-]+}],
-        ['/gdc/domains/{id}/', %r{/gdc/domains/[\w]+/}],
-
-        ['/gdc/exporter/result/{id}/{id}', %r{/gdc/exporter/result/[\w]+/[\w]+}],
-
-        ['/gdc/internal/projects/{id}/objects/setPermissions', %r{/gdc/internal/projects/[\w]+/objects/setPermissions}],
-
-        ['/gdc/md/{id}/variables/item/{id}', %r{/gdc/md/[\w]+/variables/item/[\d]+}],
-        ['/gdc/md/{id}/validate/task/{id}', %r{/gdc/md/[\w]+/validate/task/[\w]+}],
-        ['/gdc/md/{id}/using2/{id}/{id}', %r{/gdc/md/[\w]+/using2/[\d]+/[\d]+}],
-        ['/gdc/md/{id}/using2/{id}', %r{/gdc/md/[\w]+/using2/[\d]+}],
-        ['/gdc/md/{id}/userfilters?users={users}', %r{/gdc/md/[\w]+/userfilters\?users=[/\w]+}],
-        ['/gdc/md/{id}/userfilters?count={count}&offset={offset}', %r{/gdc/md/[\w]+/userfilters\?count=[\d]+&offset=[\d]+}],
-        ['/gdc/md/{id}/usedby2/{id}/{id}', %r{/gdc/md/[\w]+/usedby2/[\d]+/[\d]+}],
-        ['/gdc/md/{id}/usedby2/{id}', %r{/gdc/md/[\w]+/usedby2/[\d]+}],
-        ['/gdc/md/{id}/tasks/{id}/status', %r{/gdc/md/[\w]+/tasks/[\w]+/status}],
-        ['/gdc/md/{id}/obj/{id}/validElements', %r{/gdc/md/[\w]+/obj/[\d]+/validElements(/)?(\?.*)?}],
-        ['/gdc/md/{id}/obj/{id}/elements', %r{/gdc/md/[\w]+/obj/[\d]+/elements(/)?(\?.*)?}],
-        ['/gdc/md/{id}/obj/{id}', %r{/gdc/md/[\w]+/obj/[\d]+}],
-        ['/gdc/md/{id}/etltask/{id}', %r{/gdc/md/[\w]+/etltask/[\w]+}],
-        ['/gdc/md/{id}/dataResult/{id}', %r{/gdc/md/[\w]+/dataResult/[\d]+}],
-        ['/gdc/md/{id}', %r{/gdc/md/[\w]+}],
-
-        ['/gdc/projects/{id}/users/{id}/roles', %r{/gdc/projects/[\w]+/users/[\w]+/roles}],
-        ['/gdc/projects/{id}/users/{id}/permissions', %r{/gdc/projects/[\w]+/users/[\w]+/permissions}],
-        ['/gdc/projects/{id}/users', %r{/gdc/projects/[\w]+/users}],
-        ['/gdc/projects/{id}/schedules/{id}/executions/{id}', %r{/gdc/projects/[\w]+/schedules/[\w]+/executions/[\w]+}],
-        ['/gdc/projects/{id}/schedules/{id}', %r{/gdc/projects/[\w]+/schedules/[\w]+}],
-        ['/gdc/projects/{id}/roles/{id}', %r{/gdc/projects/[\w]+/roles/[\d]+}],
-        ['/gdc/projects/{id}/model/view/{id}', %r{/gdc/projects/[\w]+/model/view/[\w]+}],
-        ['/gdc/projects/{id}/model/view', %r{/gdc/projects/[\w]+/model/view}],
-        ['/gdc/projects/{id}/model/diff/{id}', %r{/gdc/projects/[\w]+/model/diff/[\w]+}],
-        ['/gdc/projects/{id}/model/diff', %r{/gdc/projects/[\w]+/model/diff}],
-        ['/gdc/projects/{id}/dataload/processes/{id}/executions/{id}', %r{/gdc/projects/[\w]+/dataload/processes/[\w-]+/executions/[\w-]+}],
-        ['/gdc/projects/{id}/dataload/processes/{id}', %r{/gdc/projects/[\w]+/dataload/processes/[\w-]+}],
-        ['/gdc/projects/{id}/', %r{/gdc/projects/[\w]+/}],
-        ['/gdc/projects/{id}', %r{/gdc/projects/[\w]+}]
-      ]
-
       def update_stats(title, delta)
         synchronize do
           orig_title = title
@@ -681,9 +624,7 @@ ERR
           placeholders = true
 
           if placeholders
-            PH_MAP.each do |pm|
-              break if title.gsub!(pm[1], pm[0])
-            end
+            title = self.class.map_placeholders(title)
           end
 
           stat = stats[title]

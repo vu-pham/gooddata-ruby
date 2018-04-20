@@ -76,8 +76,7 @@ describe "User filters implementation", :constraint => 'slow' do
       ['nonexistent_user@gooddata.com', @label.uri, "tomas@gooddata.com"],
       [ConnectionHelper::DEFAULT_USERNAME, @label.uri, "tomas@gooddata.com"]
     ]
-    results = @project.add_data_permissions(filters)
-    expect(results[:results].any? { |r| r[:status] == :failed }).to be_truthy
+    expect { @project.add_data_permissions(filters) }.to raise_exception(/Creating MUFs resulted in errors/)
     expect(@project.data_permissions.count).to eq 2
   end
 
@@ -95,7 +94,7 @@ describe "User filters implementation", :constraint => 'slow' do
       [ConnectionHelper::DEFAULT_USERNAME, @label.uri, 'tomas@gooddata.com']
     ]
     # note that filters will be set up even for nonexistent users but they will not be assigned
-    @project.add_data_permissions(filters, users_must_exist: false)
+    expect { @project.add_data_permissions(filters, users_must_exist: false) }.to raise_exception(/Creating MUFs resulted in errors/)
     expect(@project.data_permissions.select(&:related_uri).count).to eq 1
     expect(@project.data_permissions.select(&:related_uri).first.pretty_expression).to eq "[Dev] IN ([tomas@gooddata.com])"
   end
@@ -133,6 +132,12 @@ describe "User filters implementation", :constraint => 'slow' do
     expect(@project.data_permissions.count).to eq 0
   end
 
+  it 'should drop the filter when none of filter values is found' do
+    filters = [[ConnectionHelper::DEFAULT_USERNAME, @label.uri, '%^&*( nonexistent value']]
+    @project.add_data_permissions(filters, ignore_missing_values: true)
+    expect(@project.data_permissions.count).to eq 0
+  end
+
   it "should add a filter with nonexistent values when asked" do
     filters = [[ConnectionHelper::DEFAULT_USERNAME, @label.uri, '%^&*( nonexistent value', 'jirka@gooddata.com']]
     @project.add_data_permissions(filters, ignore_missing_values: true)
@@ -162,6 +167,18 @@ describe "User filters implementation", :constraint => 'slow' do
     expect(pretty).to eq [[ConnectionHelper::DEFAULT_USERNAME, "[Dev] IN ([tomas@gooddata.com])"]]
   end
 
+  it 'works with filters from .get_filters' do
+    filters = GoodData::UserFilterBuilder.get_filters(
+      File.expand_path('../../data/user_filters.csv', __FILE__),
+      :type => :filter,
+      :labels => [{ :label => @label, :column => 'filter' }]
+    )
+    @project.add_data_permissions(filters)
+    permissions = @project.data_permissions
+    pretty = permissions.first.pretty_expression
+    expect(pretty).to eq('[Dev] IN ([tomas@gooddata.com])')
+  end
+
   it "sets up mandatory users based on the state given as an end state by default." do
     # first let's prepare some user filters
     user_with_already_set_up_filter = @project.get_user(ConnectionHelper::DEFAULT_USERNAME)
@@ -180,7 +197,7 @@ describe "User filters implementation", :constraint => 'slow' do
     new_filters = [
       [another_user.login, @label.uri, "tomas@gooddata.com"]
     ]
-    @project.add_data_permissions(new_filters)
+    @project.add_data_permissions(new_filters, users_brick_input: [{ 'login' => ConnectionHelper::DEFAULT_USERNAME }])
     expect(@project.data_permissions.map { |f| [f.related.login, f.pretty_expression] })
       .to eq [[another_user.login, "[Dev] IN ([tomas@gooddata.com])"]]
   end
@@ -230,17 +247,10 @@ describe "User filters implementation", :constraint => 'slow' do
   end
 
   it 'should not create any superfluous filters if things go well' do
-    # first create some filters. This will error out and some filters will stay there
-    filters = [
-      ['nonexistent_user@gooddata.com', @label.uri, "tomas@gooddata.com"],
-      [ConnectionHelper::DEFAULT_USERNAME, @label.uri, "tomas@gooddata.com"]
-    ]
+    filters = [[ConnectionHelper::DEFAULT_USERNAME, @label.uri, "tomas@gooddata.com"]]
     @project.add_data_permissions(filters)
 
-    # now let's do a correct run
-    filters = [
-      [ConnectionHelper::DEFAULT_USERNAME, @label.uri, "tomas@gooddata.com"]
-    ]
+    filters = [[ConnectionHelper::DEFAULT_USERNAME, @label.uri, "tomas@gooddata.com"]]
     results = @project.add_data_permissions(filters)
     expect(results[:results].all? { |r| r[:status] == :successful }).to be_truthy
     expect(results[:results].select { |r| r[:type] == :create }.count).to eq 0
@@ -253,7 +263,7 @@ describe "User filters implementation", :constraint => 'slow' do
 
     # we want to compute stuff on different user than we are setting it on
     u = @domain.users.find { |user| user.login != ConnectionHelper::DEFAULT_USERNAME }
-    password = 'abcd1234'
+    password = 'si@gFG593fo'
     u.json['accountSetting']['password'] = password
     @domain.update_user(u)
     @project.add_user(u, 'admin')
@@ -268,7 +278,7 @@ describe "User filters implementation", :constraint => 'slow' do
     # lets restrict tomas to goodot only
     filters = [[u.login, @label.uri, 'tomas@gooddata.com'],
                [u.login, repo_label.uri, 'goodot']]
-    @project.add_data_permissions(filters)
+    @project.add_data_permissions(filters, users_brick_input: [{ 'login' => u.login }])
     expect(@project.data_permissions.pmap { |f| [f.related.login, f.pretty_expression] }).to eq [
       [u.login, "[Dev] IN ([tomas@gooddata.com])"],
       [u.login, "[Repository Name] IN ([goodot])"]
@@ -280,7 +290,7 @@ describe "User filters implementation", :constraint => 'slow' do
     # Now lets change repo to bam
     filters = [[u.login, @label.uri, 'tomas@gooddata.com'],
                [u.login, repo_label.uri, 'bam']]
-    @project.add_data_permissions(filters)
+    @project.add_data_permissions(filters, users_brick_input: [{ 'login' => u.login }])
 
     expect(@project.data_permissions.pmap { |f| [f.related.login, f.pretty_expression] }).to eq [
       [u.login, "[Dev] IN ([tomas@gooddata.com])"],
@@ -292,7 +302,7 @@ describe "User filters implementation", :constraint => 'slow' do
 
     # let's remove the repo restriction
     filters = [[u.login, @label.uri, 'tomas@gooddata.com']]
-    @project.add_data_permissions(filters)
+    @project.add_data_permissions(filters, users_brick_input: [{ 'login' => u.login }])
 
     r = computation_project.compute_report(left: [metric, 'some_attr_label_id'], top: [@label])
     expect(r.column(2)).to eq ["tomas@gooddata.com", 6, 1]

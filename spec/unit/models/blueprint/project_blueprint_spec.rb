@@ -99,12 +99,29 @@ describe GoodData::Model::ProjectBlueprint do
 
     it 'invalid blueprint should give you list of violating references' do
       errors = @invalid_blueprint.validate
-      expect(errors.size).to eq 1
-      expect(errors).to eq([
+      expect(errors.size).to eq 5
+      expect(errors).to match_array([
         {
           :type => :wrong_label_reference,
           :label => "some_label_id",
           :wrong_reference => "attr.repos.repo_id                 ERROR"
+        },
+        {
+          type: :invalid_identifier,
+          id: 'some_attr_id(hello)'
+        },
+        {
+          type: :duplicated_identifier,
+          id: 'some_label_id'
+        },
+        {
+          type: :wrong_label_reference,
+          label: "some_label_id",
+          wrong_reference: "some_attr_id"
+        },
+        {
+          type: :attribute_without_label,
+          attribute: "some_attr_id(hello)"
         }
       ])
     end
@@ -356,28 +373,6 @@ describe GoodData::Model::ProjectBlueprint do
       expect(b_a.valid?).to eq true
       expect(b_a).to eq a_b
     end
-
-    it "should fail if unable to merge date dimensions (they are different)." do
-      a = GoodData::Model::ProjectBlueprint.build("p") do |p|
-        p.add_date_dimension("created_on", title: 'title A')
-        p.add_dataset('stuff') do |d|
-          d.add_anchor('stuff_id')
-          d.add_label('name', reference: 'stuff_id')
-          d.add_date('created_on')
-        end
-      end
-      b = GoodData::Model::ProjectBlueprint.build("p") do |p|
-        p.add_date_dimension("created_on", title: 'title B')
-        p.add_dataset('stuff') do |d|
-          d.add_attribute('attr_id')
-          d.add_label('attr_name', reference: 'attr_id')
-          d.add_date('created_on')
-        end
-      end
-      expect do
-        a.merge(b)
-      end.to raise_exception 'Unable to merge date dimensions created_on with defintion {:type=>:date_dimension, :urn=>nil, :id=>"created_on", :title=>"title B"} with {:type=>:date_dimension, :urn=>nil, :id=>"created_on", :title=>"title A"}'
-    end
   end
 
   describe '#merge!' do
@@ -439,7 +434,7 @@ describe GoodData::Model::ProjectBlueprint do
         d.add_date('opportunity_comitted', dataset: 'committed_on')
       end
     end
-    expect(bp.datasets.flat_map { |d| d.find_columns_by_type(:date) }.map(&:format)).to eq [GoodData::Model::DEFAULT_DATE_FORMAT]
+    expect(bp.datasets.flat_map { |d| d.find_columns_by_type(:date) }.map { |d| d.data[:format] }).to eq [GoodData::Model::DEFAULT_DATE_FORMAT]
   end
 
   it 'blueprint can be set with explicit date' do
@@ -457,7 +452,7 @@ describe GoodData::Model::ProjectBlueprint do
       end
     end
     expect(bp.valid?).to be_truthy
-    expect(bp.datasets.flat_map { |d| d.find_columns_by_type(:date) }.map(&:format)).to eq ['yyyy/MM/dd']
+    expect(bp.datasets.flat_map { |d| d.find_columns_by_type(:date) }.map { |d| d.data[:format] }).to eq ['yyyy/MM/dd']
   end
 
   describe '#remove' do

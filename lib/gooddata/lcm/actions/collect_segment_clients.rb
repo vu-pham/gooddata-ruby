@@ -16,7 +16,10 @@ module GoodData
         param :gdc_gd_client, instance_of(Type::GdClientType), required: true
 
         description 'Organization Name'
-        param :organization, instance_of(Type::StringType), required: true
+        param :organization, instance_of(Type::StringType), required: false
+
+        description 'Domain'
+        param :domain, instance_of(Type::StringType), required: false
 
         description 'ADS Client'
         param :ads_client, instance_of(Type::AdsClientType), required: true
@@ -26,6 +29,9 @@ module GoodData
 
         description 'Table Name'
         param :release_table_name, instance_of(Type::StringType), required: false
+
+        description 'DataProduct'
+        param :data_product, instance_of(Type::GDDataProductType), required: false
       end
 
       RESULT_HEADER = [
@@ -42,8 +48,10 @@ module GoodData
           client = params.gdc_gd_client
 
           domain_name = params.organization || params.domain
+          fail "Either organisation or domain has to be specified in params" unless domain_name
           domain = client.domain(domain_name) || fail("Invalid domain name specified - #{domain_name}")
-          domain_segments = domain.segments
+          data_product = params.data_product
+          domain_segments = domain.segments(:all, data_product)
 
           segments = params.segments.map do |seg|
             domain_segments.find do |s|
@@ -53,6 +61,11 @@ module GoodData
 
           results = []
           synchronize_clients = segments.map do |segment|
+            segment_clients = segment.clients
+            missing_project_clients = segment_clients.reject(&:project?).map(&:client_id)
+
+            raise "Client(s) missing workspace: #{missing_project_clients.join(', ')}. Please make sure all clients have workspace." unless missing_project_clients.empty?
+
             replacements = {
               table_name: params.release_table_name || DEFAULT_TABLE_NAME,
               segment_id: segment.segment_id
@@ -71,7 +84,7 @@ module GoodData
             sync_info = {
               segment_id: segment.segment_id,
               from: master_pid,
-              to: segment.clients.map do |segment_client|
+              to: segment_clients.map do |segment_client|
                 client_project = segment_client.project
                 to_pid = client_project.pid
                 results << {

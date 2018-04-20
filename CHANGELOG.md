@@ -1,10 +1,64 @@
 # GoodData Ruby SDK Changelog
+## 1.0.2
+ - TMA-775: smart attribute polling
+ - TMA-809: Fix new visualization object in bricks
+ - TMA-809: new visualizationObject in replace_from_mapping
+ - TMA-690 && TMA-633 tests now verify that synchronize users action fails when supplied with unsupported sync_mode param
+ - deprecations.txt is in .gitignore file
+ - TMA-691 colect data product action has human readable output
+ - TMA-732: fix edge cases for user input sanitized MUFs
+
+## 1.0.1
+ - Bump version to 1.0.1
+ - TMA-776: Improve error handling of sync clients
+ - TMA-775: platform agnostic lookup of label
+ - TMA-762: Fix test for swapping date dimensions
+ - TMA-494: Support for java platform
+ - fix skip actions for bricks
+ - move PH_MAP to separate file
+
+## 1.0.0
+ - TMA-575: Add support for raw export-report API
+ - TMA-738: Update highline to v2
+ - TMA-711: segments filter works correctly in users brick
+ - TMA-662: Users Brick passes with empty input source
+ - Rename travis.yml to .travis.yml
+
+## 0.6.54
+ - Generating changelog automatically from git
+ - Fix resolving dataproduct
+ - TMA-685: User filters and users bricks support data product
+ - TMA-700: Fix executing empty report
+ - TMA-696: Handle status 200 with no content type
+ - TMA-632: Fix result for sync_domain_client_workspaces
+ - TMA-680: Add option include_computed_attributes
+ - mdidtouri spec has correct data types
+ - TMA-686: filtering segments in release brick
+ - TMA-663: synchronize_user_filters does not fail if the client set is empty
+ - TMA-299: Data Product used in bricks
+ - removed unused class params_inspect_middleware
+ - Update list of dependencies
+ - TMA-666: Generate junit-formatted test results
+ - simplecov has to be initialized before any other code
+ - enabling code coverage calculation during tests
+ - TMA-366: Indicate replacement for technical_user
+
+## 0.6.53
+- TMA-522 - Rollout: Incorrect CLIENT_ID assigned to client schedule
 
 ## 0.6.52
 - Add support for computed attribute in blueprint
 - Fix bug with transfering schedules without their state
 - Support segment-specific production tags (TMA-309)
 - Rewrite deprecated schedule parameter "GRAPH" (TMA-453)
+- Add parameter HTTP_LOGGING to LoggerMiddleware
+- Resolve also hidden reference parameters (TMA-411)
+- Support integer type id in Domain#clients (TMA-450)
+- Support urn for date dimension (TMA-221)
+- Implement "skip_actions" for LCM2
+- Support MAQL DIFF API (TMA-219)
+- Support for restricted flag
+- Fix deployment via SDK on Windows
 
 ## 0.6.50
 - Add support for Email Notification Rules on Process

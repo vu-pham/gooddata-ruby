@@ -86,7 +86,7 @@ module GoodData
       'GDC.time.day_us_noleading', # M/d/yy
     ]
 
-    GD_DATA_TYPES = ['BIGINT', 'DOUBLE', 'INTEGER', 'INT', /^VARCHAR\(\d{1,4}\)$/i, /^DECIMAL\(\d{1,3},\s*\d{1,3}\)$/i]
+    GD_DATA_TYPES = ['BIGINT', 'DOUBLE', 'INTEGER', 'INT', /^VARCHAR\(([1-9]\d{0,3}|10000)\)$/i, /^DECIMAL\(\d{1,3},\s*\d{1,3}\)$/i]
 
     DEFAULT_FACT_DATATYPE = 'DECIMAL(12,2)'
     DEFAULT_ATTRIBUTE_DATATYPE = 'VARCHAR(128)'
@@ -267,13 +267,24 @@ module GoodData
         d = GoodData::Helpers.deep_dup(a_schema_blueprint)
         d[:columns] = d[:columns] + b_schema_blueprint[:columns]
         d[:columns].uniq!
-        columns_that_failed_to_merge = d[:columns].group_by { |x| [:reference, :date].include?(x[:type]) ? x[:dataset] : x[:id] }.map { |k, v| [k, v.count, v] }.select { |x| x[1] > 1 }
+        columns_that_failed_to_merge = d[:columns]
+          .group_by { |x| [:reference, :date].include?(x[:type]) ? x[:dataset] : x[:id] }
+          .map { |k, v| [k, v.count, v] }.select { |x| x[1] > 1 }
         unless columns_that_failed_to_merge.empty?
           columns_that_failed_to_merge.each do |error|
-            GoodData.logger.error "Columns #{error[0]} failed to merge. There are #{error[1]} conflicting columns. When merging columns with the same name they have to be identical."
+            message = "Columns #{error[0]} failed to merge. There are " \
+                      "#{error[1]} conflicting columns. When merging columns " \
+                      "with the same name they have to be identical."
+            GoodData.logger.error message
             GoodData.logger.error error[2]
           end
-          fail "Columns #{columns_that_failed_to_merge.first} failed to merge. There are #{columns_that_failed_to_merge[1]} conflicting columns. #{columns_that_failed_to_merge[2]} When merging columns with the same name they have to be identical." unless columns_that_failed_to_merge.empty?
+          unless columns_that_failed_to_merge.empty?
+            fail "Columns #{columns_that_failed_to_merge.first} failed to " \
+                 "merge. There are #{columns_that_failed_to_merge[1]} " \
+                 "conflicting columns. #{columns_that_failed_to_merge[2]} " \
+                 "When merging columns with the same name they have to be " \
+                 "identical."
+          end
         end
         d
       end

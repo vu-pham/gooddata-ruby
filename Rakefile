@@ -7,7 +7,6 @@ require 'bundler/cli'
 require 'bundler/gem_tasks'
 
 require 'rake/testtask'
-require 'rake/notes/rake_task'
 require 'rspec/core/rake_task'
 
 require 'yard'
@@ -17,6 +16,7 @@ require 'rubocop/rake_task'
 desc 'Run RuboCop'
 RuboCop::RakeTask.new(:cop) do |task|
   task.patterns = ['{lib,spec}/**/*.rb']
+  task.options = ['--force-exclusion']
 end
 
 desc 'Run continuous integration test'
@@ -34,11 +34,12 @@ namespace :gem do
     gem = "gooddata-#{GoodData::VERSION}.gem"
 
     puts "Building #{gem} ..."
-    res = system('gem build ./gooddata.gemspec')
-    next unless res
+    res = `gem build ./gooddata.gemspec`
+    file = res.match('File: (.*)')[1]
+    next unless file
 
-    puts "Pushing #{gem} ..."
-    system("gem push #{gem}")
+    puts "Pushing #{file} ..."
+    system("gem push #{file}")
   end
 end
 
@@ -137,6 +138,29 @@ namespace :license do
 
       new_content = (license + content_lines).join
       File.open(path, 'w') { |file| file.write(new_content) }
+    end
+  end
+end
+
+namespace :changelog do
+  desc 'Updates the changelog with commit messages'
+  task :update do
+    require_relative 'lib/gooddata/version'
+    new_version = GoodData::VERSION
+    changelog = File.read('CHANGELOG.md')
+    fail 'the version is already mentioned in the changelog' if changelog =~ /## #{new_version}/
+    puts "Creating changelog for version #{new_version}"
+    current_commit = `git rev-parse HEAD`.chomp
+    last_release = %x(git describe --tags `git rev-list --tags --max-count=1`)
+    last_release_commit = `git rev-parse #{last_release}`.chomp
+    changes = `git log --format=%B --no-merges #{last_release_commit}..#{current_commit}`.split("\n").reject(&:empty?)
+    changelog_header = '# GoodData Ruby SDK Changelog'
+    changelog.slice! changelog_header
+    File.open('CHANGELOG.md', 'w+') do |file|
+      file.puts changelog_header + "\n"
+      file.puts "## #{new_version}"
+      changes.each { |change| file.puts ' - ' + change }
+      file.puts changelog
     end
   end
 end

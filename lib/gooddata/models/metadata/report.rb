@@ -15,7 +15,10 @@ module GoodData
       # Method intended to get all objects of that type in a specified project
       #
       # @param options [Hash] the options hash
-      # @option options [Boolean] :full if passed true the subclass can decide to pull in full objects. This is desirable from the usability POV but unfortunately has negative impact on performance so it is not the default
+      # @option options [Boolean] :full if passed true the subclass can decide
+      # to pull in full objects. This is desirable from the usability POV
+      # but unfortunately has negative impact on performance so it is not
+      # the default.
       # @return [Array<GoodData::MdObject> | Array<Hash>] Return the appropriate metadata objects or their representation
       def all(options = { :client => GoodData.connection, :project => GoodData.project })
         query('report', Report, options)
@@ -69,7 +72,7 @@ module GoodData
           end
         end
 
-        if result.empty?
+        if result.to_s.empty?
           ReportDataResult.new(data: [], top: 0, left: 0)
         else
           ReportDataResult.from_xtab(result)
@@ -141,10 +144,16 @@ module GoodData
 
     # Computes the report and returns the result. If it is not computable returns nil.
     #
+    # @option options [Time] :time Force the platform to simutale the result at this time
     # @return [GoodData::DataResult] Returns the result
     def execute(options = {})
+      time = options[:time]
+
+      report_req = { 'report' => uri }
+      report_req['timestamp'] = time.to_i if time
+
       fail 'You have to save the report before executing. If you do not want to do that please use GoodData::ReportDefinition' unless saved?
-      result = client.post '/gdc/xtab2/executor3', 'report_req' => { 'report' => uri }
+      result = client.post "/gdc/projects/#{project.pid}/execute", 'report_req' => report_req
       GoodData::Report.data_result(result, options.merge(client: client))
     end
 
@@ -160,9 +169,19 @@ module GoodData
     #
     # @return [String] Returns data
     def export(format, options = {})
-      result = client.post('/gdc/xtab2/executor3', 'report_req' => { 'report' => uri })
+      result = client.post("/gdc/projects/#{project.pid}/execute", 'report_req' => { 'report' => uri })
       result1 = client.post('/gdc/exporter/executor', :result_req => { :format => format, :result => result })
       client.poll_on_code(result1['uri'], options.merge(process: false))
+    end
+
+    # Exports a report too large to be computed on the UI. It executes in raw form.
+    # Saves the result into file.
+    #
+    # @param filename [String] Filename to save into
+    # @return [Net::HTTPResponse] Returns HTTP status
+    def export_raw(filename)
+      result = client.post("/gdc/app/projects/#{project.pid}/execute/raw", 'report_req' => { 'report' => uri })
+      client.download(result['uri'], filename, url_encode: false)
     end
 
     # Returns the newest (current version) report definition uri
@@ -203,7 +222,9 @@ module GoodData
       self
     end
 
-    # Method used for replacing values in their state according to mapping. Can be used to replace any values but it is typically used to replace the URIs. Returns a new object of the same type.
+    # Method used for replacing values in their state according to mapping.
+    # Can be used to replace any values but it is typically used to replace
+    # the URIs. Returns a new object of the same type.
     #
     # @param [Array<Array>]Mapping specifying what should be exchanged for what. As mapping should be used output of GoodData::Helpers.prepare_mapping.
     # @return [GoodData::Report]

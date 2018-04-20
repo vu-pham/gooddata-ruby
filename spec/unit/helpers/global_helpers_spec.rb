@@ -116,11 +116,27 @@ describe GoodData::Helpers do
         { GoodData::Helpers::ENCODED_HIDDEN_PARAMS_KEY.to_s => invalid_json }
       end
 
-      it 'it hides secrets in the error message' do
+      it 'hides secrets in the error message' do
         expect { GoodData::Helpers.decode_params(params) }.to raise_error(JSON::ParserError) do |e|
           expect(e.message).not_to include('precious_secret')
         end
       end
+    end
+
+    it 'should not throw error if missing reference parameter placeholder' do
+      params = {
+        'x' => 'y',
+        'ads_password' => 'ads_123',
+        'gd_encoded_params' => '{"login_username": "login_user", "login_password": "${my_password}"}'
+      }
+      expected_result = {
+        'x' => 'y',
+        'ads_password' => 'ads_123',
+        'login_username' => 'login_user',
+        'login_password' => '${my_password}'
+      }
+      result = GoodData::Helpers.decode_params(params, :resolve_reference_params => true)
+      expect(result).to eq(expected_result)
     end
 
     it 'should encode reference parameters in gd_encoded_params' do
@@ -227,6 +243,22 @@ describe GoodData::Helpers do
       it 'returns nil' do
         expect(@message).to be_nil
       end
+    end
+  end
+
+  describe '.decode_params' do
+    it 'interpolates reference parameters in additional_hidden_params' do
+      params = {
+        'gd_encoded_hidden_params' => '{ "additional_hidden_params": { "secret": "${my_password}" } }',
+        'my_password' => "123"
+      }
+      expected_result = {
+        'gd_encoded_hidden_params' => nil,
+        'additional_hidden_params' => { 'secret' => '123' },
+        'my_password' => '123'
+      }
+      result = GoodData::Helpers.decode_params(params, :resolve_reference_params => true)
+      expect(result).to eq(expected_result)
     end
   end
 end

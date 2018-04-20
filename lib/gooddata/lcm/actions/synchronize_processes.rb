@@ -15,19 +15,23 @@ module GoodData
         description 'Client Used for Connecting to GD'
         param :gdc_gd_client, instance_of(Type::GdClientType), required: true
 
-        description 'Uri of the source output stage. It must be in the same domain as the target project.'
-        param :ads_output_stage_uri, instance_of(Type::StringType), required: false
-
-        description 'Development Client Used for Connecting to GD'
+        description 'Client used to connecting to development domain'
         param :development_client, instance_of(Type::GdClientType), required: true
 
         description 'Synchronization Info'
         param :synchronize, array_of(instance_of(Type::SynchronizationInfoType)), required: true, generated: true
+
+        description 'Logger'
+        param :gdc_logger, instance_of(Type::GdLogger), required: true
+
+        description 'Additional Hidden Parameters'
+        param :additional_hidden_params, instance_of(Type::HashType), required: false
       end
 
       RESULT_HEADER = [
         :from,
         :to,
+        :name,
         :status
       ]
 
@@ -51,20 +55,16 @@ module GoodData
               to_project = client.projects(pid) || fail("Invalid 'to' project specified - '#{pid}'")
 
               params.gdc_logger.info "Transferring processes, from project: '#{from.title}', PID: '#{from.pid}', to project: '#{to_project.title}', PID: '#{to_project.pid}'"
-              GoodData::Project.transfer_processes(from, to_project, ads_output_stage_uri: params.ads_output_stage_uri)
+              res = GoodData::Project.transfer_processes(from, to_project, ads_output_stage_uri: info.ads_output_stage_uri)
 
               to_project.add.output_stage.client_id = client_id if client_id && to_project.add.output_stage
 
-              results << {
-                from: from.pid,
-                to: to_project.pid,
-                status: 'ok'
-              }
+              results << res
             end
           end
 
           # Return results
-          results
+          results.flatten
         end
       end
     end

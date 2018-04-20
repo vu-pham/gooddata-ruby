@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 require_relative 'base_action'
+require_relative 'purge_clients'
 
 module GoodData
   module LCM2
@@ -16,10 +17,19 @@ module GoodData
         param :gdc_gd_client, instance_of(Type::GdClientType), required: true
 
         description 'Organization Name'
-        param :organization, instance_of(Type::StringType), required: true
+        param :organization, instance_of(Type::StringType), required: false
+
+        description 'Domain'
+        param :domain, instance_of(Type::StringType), required: false
 
         description 'Segments to manage'
         param :segments, array_of(instance_of(Type::SegmentType)), required: true
+
+        description 'DataProduct to manage'
+        param :data_product, instance_of(Type::GDDataProductType), required: false
+
+        description 'Logger'
+        param :gdc_logger, instance_of(Type::GdLogger), required: true
       end
 
       RESULT_HEADER = [
@@ -32,34 +42,45 @@ module GoodData
 
       class << self
         def call(params)
+          synchronize_projects = []
+          data_product = params.data_product
           client = params.gdc_gd_client
-
           domain_name = params.organization || params.domain
+          fail "Either organisation or domain has to be specified in params" unless domain_name
           domain = client.domain(domain_name) || fail("Invalid domain name specified - #{domain_name}")
 
-          synchronize_projects = []
-          results = params.segments.pmap do |segment|
-            tmp = domain.provision_client_projects(segment.segment_id).pmap do |m|
-              Hash[m.each_pair.to_a].merge(type: :provision_result)
-            end
+          begin
+            results = params.segments.map do |segment|
+              segment_object = domain.segments(segment.segment_id, data_product)
+              tmp = segment_object.provision_client_projects.map do |m|
+                Hash[m.each_pair.to_a].merge(type: :provision_result)
+              end
 
-            unless tmp.empty?
-              synchronize_projects << {
-                segment_id: segment.segment_id,
-                from: segment.development_pid,
-                to: tmp.map do |entry|
-                  unless entry[:project_uri]
-                    raise "Provisioning project for client id #{entry[:id]} has error: #{entry[:error]}"
+              unless tmp.empty?
+                synchronize_projects << {
+                  segment_id: segment.segment_id,
+                  from: segment.development_pid,
+                  to: tmp.map do |entry|
+                    unless entry[:project_uri]
+                      raise "Provisioning project for client id #{entry[:id]} has error: #{entry[:error]}"
+                    end
+                    {
+                      pid: entry[:project_uri].split('/').last,
+                      client_id: entry[:id]
+                    }
                   end
-                  {
-                    pid: entry[:project_uri].split('/').last,
-                    client_id: entry[:id]
-                  }
-                end
-              }
-            end
+                }
+              end
 
-            tmp
+              tmp
+            end
+          rescue => e
+            params.gdc_logger.error "Problem occurs when provisioning clients. Purge all invalid clients now ..."
+            res = PurgeClients.send(:call, params)
+            params.gdc_logger.debug "Purge clients result: #{res}"
+            deleted_client_ids = res[:results].select { |r| r[:status] == 'purged' }.map { |r| r[:client_id] }
+            params.gdc_logger.error "Deleted clients: #{deleted_client_ids.join(', ')}"
+            raise e
           end
 
           results.flatten!

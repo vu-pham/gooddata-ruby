@@ -22,10 +22,13 @@ module GoodData
           param :development_pid, instance_of(Type::StringType), required: true
 
           description 'Storage Driver'
-          param :driver, instance_of(Type::StringType), required: true # required: false, , default: 'pg'
+          param :driver, instance_of(Type::StringType), required: false, default: 'pg'
 
           description 'Master Project Name'
           param :master_name, instance_of(Type::StringType), required: true
+
+          description 'Production Tag Names'
+          param :production_tags, array_of(instance_of(Type::StringType)), required: false
         end
 
         def check(value)

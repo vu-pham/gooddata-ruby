@@ -106,19 +106,12 @@ module GoodData
           client = Client.new(new_opts)
           GoodData.logger.info("Connected to server with webdav path #{client.user_webdav_path}")
 
-          if client
-            at_exit do
-              puts client.connection.stats_table if client && client.connection && (GoodData.stats_on? || client.stats_on?)
-            end
-          end
-
           # HACK: This line assigns class instance # if not done yet
           @@instance = client # rubocop:disable ClassVars
         end
 
         def connect_sso(sso)
-          client = Client.new(sso)
-          client
+          @@instance = Client.new(sso) # rubocop:disable ClassVars
         end
 
         def disconnect
@@ -197,6 +190,10 @@ module GoodData
       end
 
       def disconnect
+        if stats_on?
+          puts "API call statistics to server #{@connection.server}"
+          puts @connection.stats_table
+        end
         @connection.disconnect
       end
 

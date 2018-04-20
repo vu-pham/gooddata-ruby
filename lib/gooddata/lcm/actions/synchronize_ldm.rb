@@ -15,7 +15,7 @@ module GoodData
         description 'Client Used for Connecting to GD'
         param :gdc_gd_client, instance_of(Type::GdClientType), required: true
 
-        description 'Development Client Used for Connecting to GD'
+        description 'Client used to connecting to development domain'
         param :development_client, instance_of(Type::GdClientType), required: true
 
         description 'Synchronization Info'
@@ -23,40 +23,69 @@ module GoodData
 
         description 'LDM Update Preference'
         param :update_preference, instance_of(Type::UpdatePreferenceType), required: false
+
+        description 'Specifies whether to transfer computed attributes'
+        param :include_computed_attributes, instance_of(Type::BooleanType), required: false, default: true
+
+        description 'Logger'
+        param :gdc_logger, instance_of(Type::GdLogger), required: true
+
+        description 'Additional Hidden Parameters'
+        param :additional_hidden_params, instance_of(Type::HashType), required: false
+
+        description 'Allows to have facts with higher precision decimals'
+        param :exclude_fact_rule, instance_of(Type::BooleanType), required: false, default: false
       end
 
       class << self
         def call(params)
+          include_ca = params.include_computed_attributes.to_b
+          exclude_fact_rule = params.exclude_fact_rule.to_b
+
           results = []
 
           client = params.gdc_gd_client
           development_client = params.development_client
 
-          params.synchronize.peach do |info|
+          synchronize = params.synchronize.map do |info|
             from_project = info.from
             to_projects = info.to
 
             from = development_client.projects(from_project) || fail("Invalid 'from' project specified - '#{from_project}'")
             params.gdc_logger.info "Creating Blueprint, project: '#{from.title}', PID: #{from.pid}"
 
-            blueprint = from.blueprint(include_ca: false)
-            to_projects.each do |entry|
+            blueprint = from.blueprint(include_ca: include_ca)
+            info[:to] = to_projects.pmap do |entry|
               pid = entry[:pid]
               to_project = client.projects(pid) || fail("Invalid 'to' project specified - '#{pid}'")
 
               params.gdc_logger.info "Updating from Blueprint, project: '#{to_project.title}', PID: #{pid}"
-              to_project.update_from_blueprint(blueprint, update_preference: params.update_preference)
+              ca_scripts = to_project.update_from_blueprint(
+                blueprint,
+                update_preference: params.update_preference,
+                execute_ca_scripts: false,
+                exclude_fact_rule: exclude_fact_rule
+              )
+
+              entry[:ca_scripts] = ca_scripts
 
               results << {
                 from: from_project,
                 to: pid,
                 status: 'ok'
               }
+              entry
             end
+
+            info
           end
 
-          # Return results
-          results
+          {
+            results: results,
+            params: {
+              synchronize: synchronize
+            }
+          }
         end
       end
     end

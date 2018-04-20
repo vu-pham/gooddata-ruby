@@ -14,7 +14,10 @@ module GoodData
       # Method intended to get all objects of that type in a specified project
       #
       # @param options [Hash] the options hash
-      # @option options [Boolean] :full if passed true the subclass can decide to pull in full objects. This is desirable from the usability POV but unfortunately has negative impact on performance so it is not the default
+      # @option options [Boolean] :full if passed true the subclass can decide
+      # to pull in full objects. This is desirable from the usability
+      # POV but unfortunately has negative impact on performance so it
+      # is not the default
       # @return [Array<GoodData::MdObject> | Array<Hash>] Return the appropriate metadata objects or their representation
       def all(options = { :client => GoodData.connection, :project => GoodData.project })
         query('prompt', Variable, options)
@@ -67,7 +70,9 @@ module GoodData
       values.select { |x| x.level == :user }
     end
 
-    # Method used for replacing values in their state according to mapping. Can be used to replace any values but it is typically used to replace the URIs. Returns a new object of the same type.
+    # Method used for replacing values in their state according to mapping.
+    # Can be used to replace any values but it is typically used to replace
+    # the URIs. Returns a new object of the same type.
     #
     # @param [Array<Array>]Mapping specifying what should be exchanged for what. As mapping should be used output of GoodData::Helpers.prepare_mapping.
     # @return [GoodData::Variable]

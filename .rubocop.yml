@@ -1,5 +1,7 @@
 AllCops:
   DisplayCopNames: true
+  Exclude:
+      - 'spec/helpers/appstore_project_helper.rb'
 
 AbcSize:
   Enabled: false
@@ -24,7 +26,7 @@ Documentation:
 
 EachWithObject:
   Enabled: false
-  
+
 Eval:
   Enabled: false
 
@@ -35,7 +37,7 @@ HashSyntax:
   Enabled: false
 
 LineLength:
-  Max: 323
+  Max: 180
 
 MethodLength:
   Enabled: false
@@ -95,4 +97,7 @@ UnneededInterpolation:
   Enabled: false
 
 UselessAccessModifier:
+  Enabled: false
+
+Style/PerlBackrefs:
   Enabled: false

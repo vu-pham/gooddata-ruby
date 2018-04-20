@@ -26,6 +26,7 @@ describe GoodData::LCM2::CollectMeta do
 
     it 'retrieves all dashboards' do
       expect(GoodData::Dashboard).to receive(:all).and_return({})
+      expect(GoodData::MdObject).to receive(:query).and_return({})
       subject.class.call(params)
     end
   end
@@ -35,7 +36,7 @@ describe GoodData::LCM2::CollectMeta do
       params = {
         development_client: development_client,
         synchronize: [{ from: 'project_id' }],
-        production_tag: 'production_tag'
+        production_tags: 'production_tag'
       }
       GoodData::LCM2.convert_to_smart_hash(params)
     end
@@ -53,7 +54,7 @@ describe GoodData::LCM2::CollectMeta do
       params = {
         development_client: development_client,
         synchronize: [{ from: 'project_id' }],
-        segments: [{ production_tag: 'segment_production_tag' }, {}]
+        segments: [{ production_tags: 'segment_production_tag' }, {}]
       }
       GoodData::LCM2.convert_to_smart_hash(params)
     end
@@ -71,8 +72,8 @@ describe GoodData::LCM2::CollectMeta do
       params = {
         development_client: development_client,
         synchronize: [{ from: 'project_id' }],
-        segments: [{ production_tag: 'segment_production_tag' }, {}],
-        production_tag: 'production_tag'
+        segments: [{ production_tags: 'segment_production_tag' }, {}],
+        production_tags: 'production_tag'
       }
       GoodData::LCM2.convert_to_smart_hash(params)
     end

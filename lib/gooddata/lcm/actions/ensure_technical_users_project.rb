@@ -16,10 +16,17 @@ module GoodData
         param :gdc_gd_client, instance_of(Type::GdClientType), required: true
 
         description 'Technical users'
-        param :technical_user, array_of(instance_of(Type::StringType)), required: false
+        param :technical_user, array_of(instance_of(Type::StringType)),
+              required: false, deprecated: true, replacement: :technical_users
+
+        description 'Technical users'
+        param :technical_users, array_of(instance_of(Type::StringType)), required: false
 
         description 'Synchronization Info'
         param :synchronize, array_of(instance_of(Type::SynchronizationInfoType)), required: true, generated: true
+
+        description 'Clients'
+        param :clients, array_of(instance_of(Type::HashType)), required: false
       end
 
       RESULT_HEADER = [
@@ -36,7 +43,7 @@ module GoodData
         def call(params)
           client = params.gdc_gd_client
 
-          technical_users = params.technical_user || []
+          technical_users = params.technical_users || params.technical_user || []
           new_users = technical_users.map do |technical_user|
             {
               login: technical_user,
@@ -46,24 +53,32 @@ module GoodData
 
           results = params.synchronize.pmap do |synchronize_info|
             synchronize_info[:to].pmap do |entry|
-              project = client.projects(entry[:pid])
-              res = project.create_users(new_users)
-
-              new_users.zip(res).map do |f, s|
-                {
-                  project: project.title,
-                  pid: project.pid,
-                  login: f[:login],
-                  role: f[:role],
-                  result: s[:type],
-                  message: s[:message],
-                  url: s[:user]
-                }
-              end
+              ensure_users(client, entry[:pid], new_users)
             end
-          end
+          end.flatten
 
-          results.flatten
+          results += params.clients.pmap { |input_client| input_client[:project] }.compact.pmap { |pid| ensure_users(client, pid, new_users) }.flatten if params.clients
+
+          results
+        end
+
+        private
+
+        def ensure_users(client, project_id, new_users)
+          project = client.projects(project_id)
+          res = project.create_users(new_users)
+
+          new_users.zip(res).map do |f, s|
+            {
+              project: project.title,
+              pid: project.pid,
+              login: f[:login],
+              role: f[:role],
+              result: s[:type],
+              message: s[:message],
+              url: s[:user]
+            }
+          end
         end
       end
     end

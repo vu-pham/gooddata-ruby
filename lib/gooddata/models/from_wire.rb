@@ -107,6 +107,8 @@ module GoodData
           d[:type] = :date_dimension
           d[:id] = date_dim['dateDimension']['name']
           d[:title] = date_dim['dateDimension']['title']
+          d[:urn] = date_dim['dateDimension']['urn']
+          d[:identifier_prefix] = date_dim['dateDimension']['identifierPrefix']
         end
       end
 
@@ -124,6 +126,7 @@ module GoodData
             f[:description] = fact['fact']['description'] if fact['fact']['description']
             f[:folder] = fact['fact']['folder']
             f[:gd_data_type] = fact['fact']['dataType'] || GoodData::Model::DEFAULT_FACT_DATATYPE
+            f[:restricted] = fact['fact']['restricted'] if fact['fact']['restricted']
           end
         end
       end

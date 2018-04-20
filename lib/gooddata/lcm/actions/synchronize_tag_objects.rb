@@ -16,16 +16,25 @@ module GoodData
         description 'Client Used for Connecting to GD'
         param :gdc_gd_client, instance_of(Type::GdClientType), required: true
 
+        description 'Client used to connecting to development domain'
+        param :development_client, instance_of(Type::GdClientType), required: true
+
         description 'Synchronization Info'
         param :synchronize, array_of(instance_of(Type::SynchronizationInfoType)), required: true, generated: true
 
-        description 'Tag Name'
-        param :production_tag, instance_of(Type::StringType), required: false
+        description 'Production Tag Names'
+        param :production_tags, array_of(instance_of(Type::StringType)), required: false
+
+        description 'Production Tag Names'
+        param :production_tag, instance_of(Type::StringType), required: false, deprecated: true, replacement: :production_tags
+
+        description 'Additional Hidden Parameters'
+        param :additional_hidden_params, instance_of(Type::HashType), required: false
       end
 
       class << self
         def call(params)
-          return [] unless params.production_tag
+          return [] unless params.production_tags || params.production_tag
 
           results = []
 
@@ -42,12 +51,12 @@ module GoodData
               pid = entry[:pid]
               to_project = client.projects(pid) || fail("Invalid 'to' project specified - '#{pid}'")
 
-              GoodData::Project.transfer_tagged_stuff(from, to_project, params.production_tag)
+              GoodData::Project.transfer_tagged_stuff(from, to_project, params.production_tags || params.production_tag)
 
               results << {
                 from: from_project,
                 to: pid,
-                tag: params.production_tag,
+                tag: params.production_tags || params.production_tag,
                 status: 'ok'
               }
             end

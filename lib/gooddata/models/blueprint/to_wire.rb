@@ -113,6 +113,7 @@ module GoodData
           dd[:name] = dataset[:id]
           dd[:urn] = dataset[:urn] if dataset[:urn]
           dd[:title] = GoodData::Model.title(dataset)
+          dd[:identifierPrefix] = dataset[:identifier_prefix] if dataset[:identifier_prefix]
         end
         { dateDimension: payload }
       end
@@ -133,6 +134,7 @@ module GoodData
         }
         payload.tap do |p|
           p[:fact][:description] = GoodData::Model.description(fact) if GoodData::Model.description(fact)
+          p[:fact][:restricted] = fact[:restricted] if fact[:restricted]
         end
       end
 

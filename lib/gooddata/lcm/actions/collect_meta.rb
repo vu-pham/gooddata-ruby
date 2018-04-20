@@ -13,10 +13,13 @@ module GoodData
       with objects inside dashboards (reports, metrics ...) from development projects"
 
       PARAMS = define_params(self) do
-        description 'Production Tag Name'
-        param :production_tag, instance_of(Type::StringType), required: false
+        description 'Production Tag Names'
+        param :production_tags, array_of(instance_of(Type::StringType)), required: false
 
-        description 'Development Client Used for Connecting to GD'
+        description 'Production Tag Names'
+        param :production_tag, instance_of(Type::StringType), required: false, deprecated: true, replacement: :production_tags
+
+        description 'Client used to connecting to development domain'
         param :development_client, instance_of(Type::GdClientType), required: true
 
         description 'Synchronization Info'
@@ -24,6 +27,9 @@ module GoodData
 
         description 'Segments to search for segment-specific production tags'
         param :segments, array_of(instance_of(Type::SegmentType)), required: false
+
+        description 'Flag to mark if we need to transfer all objects'
+        param :transfer_all, instance_of(Type::BooleanType), required: false, default: false
       end
 
       class << self
@@ -32,21 +38,25 @@ module GoodData
 
           development_client = params.development_client
           segments_to_tags = Helpers.segment_production_tags(params.segments)
+          transfer_all = GoodData::Helpers.to_boolean(params.transfer_all)
 
           synchronize = params.synchronize.pmap do |info|
             from = info.from
             from_project = development_client.projects(from) || fail("Invalid 'from' project specified - '#{from}'")
 
             segment_tags = segments_to_tags[info.segment]
-            production_tags = Helpers.parse_production_tags(params.production_tag, segment_tags)
-            if production_tags.any?
-              objects = GoodData::Dashboard.find_by_tag(
-                production_tags,
+            production_tags = Helpers.parse_production_tags(params.production_tags || params.production_tag, segment_tags)
+
+            if transfer_all || production_tags.empty?
+              old_dashboards = GoodData::Dashboard.all(
                 project: from_project,
                 client: development_client
               )
+              kpi_dashboards = MdObject.query('analyticalDashboard', MdObject, client: development_client, project: from_project)
+              objects = old_dashboards.to_a + kpi_dashboards.to_a
             else
-              objects = GoodData::Dashboard.all(
+              objects = GoodData::Dashboard.find_by_tag(
+                production_tags,
                 project: from_project,
                 client: development_client
               )

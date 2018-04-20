@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 require_relative '../project_log_formatter'
+require 'active_support/core_ext/hash/indifferent_access'
 
 module GoodData
   module UserFilterBuilder
@@ -130,7 +131,11 @@ module GoodData
           next true if domain_user
           false
         end
-        fail "#{missing_users.count} users are not part of the project and variable cannot be resolved since :users_must_exist is set to true (#{missing_users.join(', ')})" unless missing_users.empty?
+        unless missing_users.empty?
+          fail "#{missing_users.count} users are not part of the project and " \
+               "variable cannot be resolved since :users_must_exist is set " \
+               "to true (#{missing_users.join(', ')})"
+        end
       end
     end
 
@@ -257,30 +262,26 @@ module GoodData
     #
     # @param filters [Array<Hash>] Filters definition
     # @return [Array] first is list of MAQL statements
-    def self.maqlify_filters(filters, options = {})
+    def self.maqlify_filters(filters, project_users, options = {})
       fail_early = options[:fail_early] == false ? false : true
       users_cache = options[:users_cache]
       labels_cache = create_label_cache(filters, options)
       small_labels = get_small_labels(labels_cache)
       lookups_cache = create_lookups_cache(small_labels)
       attrs_cache = create_attrs_cache(filters, options)
-      users = Hash[
-        options[:project].users.map do |user|
-          [user.login, user.profile_url]
-        end
-      ]
       create_filter_proc = proc do |login, f|
         expression, errors = create_expression(f, labels_cache, lookups_cache, attrs_cache, options)
+        safe_login = login.downcase
         profiles_uri = if options[:type] == :muf
-                         uri = users[login]
-                         uri.nil? ? ('/gdc/account/profile/' + login) : uri
+                         project_user = project_users.find { |u| u.login == login }
+                         project_user.nil? ? ('/gdc/account/profile/' + safe_login) : project_user.profile_url
                        elsif options[:type] == :variable
                          (users_cache[login] && users_cache[login].uri)
                        else
                          fail 'Unsuported type in maqlify_filters.'
                        end
 
-        if profiles_uri && expression
+        if profiles_uri && expression && expression != 'TRUE'
           [create_user_filter(expression, profiles_uri)] + errors
         else
           [] + errors
@@ -369,12 +370,15 @@ module GoodData
       dry_run = options[:dry_run]
       project_log_formatter = GoodData::ProjectLogFormatter.new(project)
 
+      project_users = project.users
       filters = normalize_filters(user_filters)
-      user_filters, errors = maqlify_filters(filters, options.merge(users_must_exist: users_must_exist, type: :muf))
+      user_filters, errors = maqlify_filters(filters, project_users, options.merge(users_must_exist: users_must_exist, type: :muf))
 
       fail GoodData::FilterMaqlizationError, errors if !ignore_missing_values && !errors.empty?
       filters = user_filters.map { |data| client.create(MandatoryUserFilter, data, project: project) }
       to_create, to_delete = resolve_user_filters(filters, project.data_permissions)
+
+      to_delete = sanitize_filters_to_delete(to_delete, options[:users_brick_input], project_users)
 
       if options[:do_not_touch_filters_that_are_not_mentioned]
         GoodData.logger.warn("Data permissions computed: #{to_create.count} to create")
@@ -400,11 +404,19 @@ module GoodData
           res = client.post("/gdc/md/#{project.pid}/userfilters", payload)
 
           # turn the errors from hashes into array of hashes
-          res['userFiltersUpdateResult'].flat_map { |k, v| v.map { |r| { status: k.to_sym, user: r, type: :create } } }.map { |result| result[:status] == :failed ? result.merge(GoodData::Helpers.symbolize_keys(result[:user])) : result }
+          update_result = res['userFiltersUpdateResult'].flat_map do |k, v|
+            v.map { |r| { status: k.to_sym, user: r, type: :create } }
+          end
+
+          update_result.map do |result|
+            result[:status] == :failed ? result.merge(GoodData::Helpers.symbolize_keys(result[:user])) : result
+          end
         end
       end
 
       project_log_formatter.log_user_filter_results(create_results, to_create)
+      create_errors = create_results.select { |r| r[:status] == :failed }
+      fail "Creating MUFs resulted in errors: #{create_errors}" if create_errors.any?
 
       delete_results = unless options[:do_not_touch_filters_that_are_not_mentioned]
                          to_delete.each_slice(100).flat_map do |batch|
@@ -435,6 +447,8 @@ module GoodData
                        end
 
       project_log_formatter.log_user_filter_results(delete_results, to_delete)
+      delete_errors = delete_results.select { |r| r[:status] == :failed } if delete_results
+      fail "Deleting MUFs resulted in errors: #{delete_errors}" if delete_errors && delete_errors.any?
 
       { created: to_create, deleted: to_delete, results: create_results + (delete_results || []) }
     end
@@ -490,14 +504,14 @@ module GoodData
       missing_users = get_missing_users(filters, options.merge(users_cache: users_cache))
       user_filters, errors = if missing_users.empty?
                                verify_existing_users(filters, project: project, users_must_exist: users_must_exist, users_cache: users_cache)
-                               maqlify_filters(filters, options.merge(users_cache: users_cache, users_must_exist: users_must_exist))
+                               maqlify_filters(filters, users, options.merge(users_cache: users_cache, users_must_exist: users_must_exist))
                              elsif missing_users.count < 100
                                verify_existing_users(filters, project: project, users_must_exist: users_must_exist, users_cache: users_cache)
-                               maqlify_filters(filters, options.merge(users_cache: users_cache, users_must_exist: users_must_exist))
+                               maqlify_filters(filters, users, options.merge(users_cache: users_cache, users_must_exist: users_must_exist))
                              else
                                users_cache = create_cache(users, :login)
                                verify_existing_users(filters, project: project, users_must_exist: users_must_exist, users_cache: users_cache)
-                               maqlify_filters(filters, options.merge(users_cache: users_cache, users_must_exist: users_must_exist))
+                               maqlify_filters(filters, users, options.merge(users_cache: users_cache, users_must_exist: users_must_exist))
                              end
 
       fail GoodData::FilterMaqlizationError, errors if !ignore_missing_values && !errors.empty?
@@ -525,6 +539,22 @@ module GoodData
             ]
           }
         end
+      end
+    end
+
+    # Removes MUFs from to_delete unless in user is in users_brick_input
+    # if this does not happen, users that are about to be deleted by users_brick
+    # would have all their filters removed now, which is not desirable
+    def self.sanitize_filters_to_delete(to_delete, users_brick_input, project_users)
+      return [] unless users_brick_input && users_brick_input.any?
+      user_profiles = users_brick_input.map do |user|
+        result = project_users.find { |u| u.login == user.with_indifferent_access['login'] }
+        next unless result
+        result.profile_url
+      end.compact
+      return [] unless user_profiles.any?
+      to_delete.reject do |_, value|
+        user_profiles.none? { |profile| profile == value.first.json[:related] }
       end
     end
   end

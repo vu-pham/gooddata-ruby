@@ -15,11 +15,17 @@ module GoodData
         description 'Client Used for Connecting to GD'
         param :gdc_gd_client, instance_of(Type::GdClientType), required: true
 
-        description 'Development Client Used for Connecting to GD'
+        description 'Client used to connecting to development domain'
         param :development_client, instance_of(Type::GdClientType), required: true
 
         description 'Synchronization Info'
         param :synchronize, array_of(instance_of(Type::SynchronizationInfoType)), required: true, generated: true
+
+        description 'Logger'
+        param :gdc_logger, instance_of(Type::GdLogger), required: true
+
+        description 'Additional Hidden Parameters'
+        param :additional_hidden_params, instance_of(Type::HashType), required: false
       end
 
       RESULT_HEADER = [
@@ -44,7 +50,11 @@ module GoodData
               pid = entry[:pid]
               to_project = client.projects(pid) || fail("Invalid 'to' project specified - '#{pid}'")
 
-              params.gdc_logger.info "Transferring Custom Color Palette, from project: '#{from.title}', PID: '#{from.pid}', to project: '#{to_project.title}', PID: '#{to_project.pid}'"
+              params.gdc_logger.info(
+                "Transferring Custom Color Palette, from project: " \
+                "'#{from.title}', PID: '#{from.pid}', to project: " \
+                "'#{to_project.title}', PID: '#{to_project.pid}'"
+              )
               GoodData::Project.transfer_color_palette(from, to_project)
 
               results << {

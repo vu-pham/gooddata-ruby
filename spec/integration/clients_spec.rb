@@ -38,7 +38,7 @@ describe GoodData::Client do
     it 'Returns specific tenant when schedule ID passed' do
       client = @segment.clients(@segment_client)
       expect(client).to be_an_instance_of(GoodData::Client)
-      expect(client.uri).to eq @segment_client.uri
+      expect(client.client_id).to eq @segment_client.client_id
     end
 
     after(:all) do
@@ -58,6 +58,27 @@ describe GoodData::Client do
       s = @segment.clients(@segment_client)
       s.delete
       expect(@segment.clients.count).to eq 0
+      @segment_client = nil
+    end
+  end
+
+  describe '#dissociate' do
+    before(:all) do
+      client_id = SecureRandom.uuid
+      @client_project = @client.create_project(title: 'client_1 project', auth_token: ConnectionHelper::GD_PROJECT_TOKEN)
+      @segment_client = @segment.create_client(id: "tenant_#{client_id}", project: @client_project)
+    end
+
+    after(:all) do
+      @client_project && @client_project.delete
+    end
+
+    it 'Dissociate particular client and their project is not cleaned up' do
+      expect(@segment.clients.count).to eq 1
+      s = @segment.clients(@segment_client)
+      s.dissociate
+      expect(@segment.clients.count).to eq 0
+      expect(@client_project.reload!.state).to eq :enabled
       @segment_client = nil
     end
   end

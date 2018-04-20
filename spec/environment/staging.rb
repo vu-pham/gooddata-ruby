@@ -7,15 +7,18 @@
 module GoodData
   module Environment
     module ConnectionHelper
-      set_const :GD_PROJECT_TOKEN, GoodData::Helpers.decrypt("YC+foKO2M8rIfB5gxF/sVvop5dRA7d/zLO/zzUlBr9ZimnoYeLFyAqU20U4k\ncRYb\n", ENV['GD_SPEC_PASSWORD'] || ENV['BIA_ENCRYPTION_KEY'])
+      encrypted_token = "2OSh3iq0CJqJMbRJY5VvB9k1AaOus2YOEweAoat+neY=\n"
+      key = ENV['GD_SPEC_PASSWORD'] || ENV['BIA_ENCRYPTION_KEY']
+      token = GoodData::Helpers.decrypt(encrypted_token, key)
+      set_const :GD_PROJECT_TOKEN, token
       set_const :DEFAULT_DOMAIN, 'staging-lcm-prod'
       set_const :DEFAULT_SERVER, 'https://staging-lcm-prod.intgdc.com'
       set_const :DEFAULT_USER_URL, '/gdc/account/profile/e306b64fb4178785c9cf29c29b5e498a'
-      set_const :STAGING_URI, 'https://ea-di.staging.intgdc.com/uploads/'
+      set_const :STAGING_URI, 'https://staging-lcm-prod.intgdc.com/gdc/uploads/'
     end
 
     module ProcessHelper
-      set_const :PROCESS_ID, '83bcb06a-1735-49cd-99e9-58df1c856b06'
+      set_const :PROCESS_ID, '05cd64ef-db14-49f0-a755-d94d0fb1b3cd'
     end
 
     module ProjectHelper
